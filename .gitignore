@@ -1,0 +1,68 @@
+# Build directories
+build/
+bin/
+lib/
+cmake-build-*/
+
+# Qt generated files
+*.pro.user
+*.pro.user.*
+*.qm
+.qmake.stash
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# Compiled files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# IDE files
+.vscode/
+.idea/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Temporary files
+*~
+*.swp
+*.tmp
+
+# User configuration
+config.ini
+*.conf
+
+# Secrets (API keys)
+src/secrets.h
