@@ -3,6 +3,7 @@
 
 #include <QWidget>
 #include <QVector>
+#include <QColor>
 
 class WaveformWidget : public QWidget
 {
@@ -13,6 +14,7 @@ public:
 
     void setPeaks(const QVector<float>& peaks);
     void setPosition(double position); // 0.0 to 1.0
+    void setUnplayedColor(const QColor& color);
     void clear();
     bool isDragging() const { return m_dragging; }
 
@@ -39,6 +41,7 @@ private:
     bool m_dragging;
     bool m_hovering;
     double m_hoverPosition;  // mouse hover position 0.0-1.0
+    QColor m_unplayedColor;  // overridable unplayed bar color
 };
 
 #endif // WAVEFORMWIDGET_H

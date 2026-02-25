@@ -1,6 +1,5 @@
 #include "lastfmapi.h"
 #include <QUrl>
-#include <QUrlQuery>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -140,23 +139,25 @@ void LastFmAPI::getUserInfo(const QString& username)
 void LastFmAPI::makeRequest(const QString& method, const QMap<QString, QString>& params, RequestType type)
 {
     QUrl url(API_URL);
-    QUrlQuery query;
 
-    // Add all parameters to query
+    // Build query string with explicit percent-encoding so special characters
+    // in track/artist/album names (e.g. &, +, #, quotes) don't break the URL.
+    // QUrlQuery doesn't encode all necessary characters for Last.fm's server.
+    QStringList queryParts;
     for (auto it = params.constBegin(); it != params.constEnd(); ++it) {
-        query.addQueryItem(it.key(), it.value());
+        queryParts << QString::fromUtf8(QUrl::toPercentEncoding(it.key()))
+                      + "="
+                      + QString::fromUtf8(QUrl::toPercentEncoding(it.value()));
     }
-
-    // Add format
-    query.addQueryItem("format", "json");
+    queryParts << "format=json";
 
     // Add API signature for authenticated methods
     if (type == GetSession || type == GetTrackInfo || type == GetAlbumInfo) {
         QString signature = buildApiSignature(params);
-        query.addQueryItem("api_sig", signature);
+        queryParts << "api_sig=" + signature;
     }
 
-    url.setQuery(query);
+    url.setQuery(queryParts.join("&"), QUrl::StrictMode);
 
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader, "DeezerClient-LastFm/1.0");

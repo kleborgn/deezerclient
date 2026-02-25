@@ -9,7 +9,7 @@ static constexpr int BAR_STEP  = BAR_WIDTH + BAR_GAP;
 
 // Deezer-themed palette
 static const QColor COLOR_PLAYED(162, 56, 255);        // #A238FF  Deezer purple
-static const QColor COLOR_UNPLAYED(140, 140, 140);     // medium gray
+static const QColor DEFAULT_UNPLAYED(140, 140, 140);   // medium gray
 static const QColor COLOR_PLAYHEAD(162, 56, 255);      // #A238FF
 static const QColor COLOR_HOVER(255, 255, 255, 100);
 
@@ -20,6 +20,7 @@ WaveformWidget::WaveformWidget(QWidget *parent)
     , m_dragging(false)
     , m_hovering(false)
     , m_hoverPosition(0.0)
+    , m_unplayedColor(DEFAULT_UNPLAYED)
 {
     setMouseTracking(true);
     setCursor(Qt::PointingHandCursor);
@@ -41,6 +42,12 @@ void WaveformWidget::setPosition(double position)
         m_position = qBound(0.0, position, 1.0);
         update();
     }
+}
+
+void WaveformWidget::setUnplayedColor(const QColor& color)
+{
+    m_unplayedColor = color.isValid() ? color : DEFAULT_UNPLAYED;
+    update();
 }
 
 void WaveformWidget::clear()
@@ -86,9 +93,9 @@ void WaveformWidget::paintEvent(QPaintEvent *)
         if (displayPos > 0.0) {
             int px = static_cast<int>(displayPos * w);
             p.fillRect(0,  cy - barH / 2, px,     barH, COLOR_PLAYED);
-            p.fillRect(px, cy - barH / 2, w - px, barH, COLOR_UNPLAYED);
+            p.fillRect(px, cy - barH / 2, w - px, barH, m_unplayedColor);
         } else {
-            p.fillRect(0, cy - barH / 2, w, barH, COLOR_UNPLAYED);
+            p.fillRect(0, cy - barH / 2, w, barH, m_unplayedColor);
         }
     } else {
         // ── draw waveform bars ──────────────────────────────────
@@ -106,7 +113,7 @@ void WaveformWidget::paintEvent(QPaintEvent *)
             const int halfH = qMax(1, static_cast<int>(peak * maxHalf));
             const int x     = i * BAR_STEP;
             const bool played = (i <= playedBar);
-            const QColor color = played ? COLOR_PLAYED : COLOR_UNPLAYED;
+            const QColor color = played ? COLOR_PLAYED : m_unplayedColor;
 
             // Symmetric bar around centre line
             p.fillRect(x, cy - halfH, BAR_WIDTH, halfH * 2, color);

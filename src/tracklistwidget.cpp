@@ -6,7 +6,19 @@
 #include <QMenu>
 #include <QKeyEvent>
 #include <QDropEvent>
+#include <QStyledItemDelegate>
 #include <algorithm>
+
+// Delegate that suppresses per-cell hover highlight (State_MouseOver)
+class NoCellHoverDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        QStyleOptionViewItem opt = option;
+        opt.state &= ~QStyle::State_MouseOver;
+        QStyledItemDelegate::paint(painter, opt, index);
+    }
+};
 
 // Custom table widget with drag-and-drop support
 class DraggableTableWidget : public QTableWidget {
@@ -84,9 +96,13 @@ void TrackListWidget::setupUI()
     m_trackTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_trackTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_trackTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_trackTable->horizontalHeader()->setStretchLastSection(true);
+    m_trackTable->horizontalHeader()->setStretchLastSection(false);
+    m_trackTable->horizontalHeader()->setMinimumSectionSize(14);
     m_trackTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     m_trackTable->verticalHeader()->setVisible(false);
+    m_trackTable->setShowGrid(false);
+    m_trackTable->setFrameShape(QFrame::NoFrame);
+    m_trackTable->setMouseTracking(true);
 
     // Enable drag-and-drop (initially disabled, enabled in setMode)
     m_trackTable->setDragEnabled(false);
@@ -94,8 +110,12 @@ void TrackListWidget::setupUI()
     m_trackTable->setDragDropMode(QAbstractItemView::InternalMove);
     m_trackTable->setDefaultDropAction(Qt::MoveAction);
 
-    // Install event filter for keyboard shortcuts
+    // Suppress per-cell hover highlight; row hover is handled by onCellEntered
+    m_trackTable->setItemDelegate(new NoCellHoverDelegate(m_trackTable));
+
+    // Install event filter for keyboard shortcuts and Leave detection
     m_trackTable->installEventFilter(this);
+    m_trackTable->viewport()->installEventFilter(this);
 
     // Add to main layout
     mainLayout->addLayout(searchLayout);
@@ -107,6 +127,7 @@ void TrackListWidget::setupUI()
     connect(m_trackTable, &QTableWidget::cellDoubleClicked, this, &TrackListWidget::onTableDoubleClicked);
     connect(m_trackTable, &QTableWidget::cellClicked, this, &TrackListWidget::onCellClicked);
     connect(m_trackTable, &QTableWidget::itemSelectionChanged, this, &TrackListWidget::onSelectionChanged);
+    connect(m_trackTable, &QTableWidget::cellEntered, this, &TrackListWidget::onCellEntered);
 
     // Connect drag-and-drop signal
     connect(static_cast<DraggableTableWidget*>(m_trackTable),
@@ -221,6 +242,7 @@ void TrackListWidget::onSelectionChanged()
 
 void TrackListWidget::setCurrentTrackId(const QString& id)
 {
+    m_currentTrackId = id;
     for (int i = 0; i < m_trackTable->rowCount(); ++i) {
         bool isCurrent = (i < m_tracks.size() && m_tracks[i]->id() == id);
 
@@ -233,7 +255,7 @@ void TrackListWidget::setCurrentTrackId(const QString& id)
             item->setFont(font);
 
             if (isCurrent) {
-                item->setBackground(QBrush(QColor(60, 60, 100)));
+                item->setBackground(QBrush(m_highlightColor));
             } else {
                 item->setBackground(Qt::transparent);
             }
@@ -253,26 +275,65 @@ void TrackListWidget::setCurrentTrackId(const QString& id)
     }
 }
 
+void TrackListWidget::setHighlightColor(const QColor& color)
+{
+    m_highlightColor = color.isValid() ? color : QColor(60, 60, 100);
+    if (!m_currentTrackId.isEmpty())
+        setCurrentTrackId(m_currentTrackId);
+}
+
+void TrackListWidget::setHoverColor(const QColor& color)
+{
+    m_hoverColor = color.isValid() ? color : QColor(50, 50, 70);
+}
+
+void TrackListWidget::onCellEntered(int row, int /*column*/)
+{
+    // Clear previous hover row
+    if (m_hoveredRow >= 0 && m_hoveredRow != row && m_hoveredRow < m_trackTable->rowCount()) {
+        bool isCurrent = (m_hoveredRow < m_tracks.size() && m_tracks[m_hoveredRow]->id() == m_currentTrackId);
+        for (int col = 0; col < m_trackTable->columnCount(); ++col) {
+            QTableWidgetItem* item = m_trackTable->item(m_hoveredRow, col);
+            if (item)
+                item->setBackground(isCurrent ? QBrush(m_highlightColor) : Qt::transparent);
+        }
+    }
+
+    // Set new hover row (skip if it's the current playing track)
+    m_hoveredRow = row;
+    if (row >= 0 && row < m_trackTable->rowCount()) {
+        bool isCurrent = (row < m_tracks.size() && m_tracks[row]->id() == m_currentTrackId);
+        if (!isCurrent) {
+            for (int col = 0; col < m_trackTable->columnCount(); ++col) {
+                QTableWidgetItem* item = m_trackTable->item(row, col);
+                if (item)
+                    item->setBackground(QBrush(m_hoverColor));
+            }
+        }
+    }
+}
+
 void TrackListWidget::populateTable()
 {
     m_trackTable->setRowCount(0);
 
     if (m_mode == QueueMode) {
-        // Simplified queue columns: #, Title, Scrobbles, Duration, ♡
-        m_trackTable->setColumnCount(5);
-        m_trackTable->setHorizontalHeaderLabels({"#", "Title", "Scrobbles", "Duration", ""});
+        // Queue columns: #, Title, Artist, Scrobbles, Duration, ♡
+        m_trackTable->setColumnCount(6);
+        m_trackTable->setHorizontalHeaderLabels({"#", "Title", "Artist", "Scrobbles", "Duration", ""});
         m_trackTable->horizontalHeader()->setVisible(false);
 
         // Column sizing
         m_trackTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
         m_trackTable->setColumnWidth(0, 40);
         m_trackTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-        m_trackTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Fixed);
-        m_trackTable->setColumnWidth(2, 60);
+        m_trackTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
         m_trackTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed);
         m_trackTable->setColumnWidth(3, 60);
         m_trackTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Fixed);
-        m_trackTable->setColumnWidth(4, 30);
+        m_trackTable->setColumnWidth(4, 60);
+        m_trackTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Fixed);
+        m_trackTable->setColumnWidth(5, 20);
 
         for (int i = 0; i < m_tracks.size(); ++i) {
             auto track = m_tracks[i];
@@ -285,6 +346,7 @@ void TrackListWidget::populateTable()
             m_trackTable->setItem(i, 0, numItem);
 
             m_trackTable->setItem(i, 1, new QTableWidgetItem(track->title()));
+            m_trackTable->setItem(i, 2, new QTableWidgetItem(track->displayArtist()));
 
             // Scrobble count
             QString scrobbleText = track->hasScrobbleData()
@@ -292,11 +354,11 @@ void TrackListWidget::populateTable()
                 : QString();
             QTableWidgetItem* scrobbleItem = new QTableWidgetItem(scrobbleText);
             scrobbleItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-            m_trackTable->setItem(i, 2, scrobbleItem);
+            m_trackTable->setItem(i, 3, scrobbleItem);
 
             QTableWidgetItem* durItem = new QTableWidgetItem(track->durationString());
             durItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-            m_trackTable->setItem(i, 3, durItem);
+            m_trackTable->setItem(i, 4, durItem);
 
             // Favorite heart
             QString heartText = track->isFavorite()
@@ -307,7 +369,7 @@ void TrackListWidget::populateTable()
             if (track->isFavorite()) {
                 heartItem->setForeground(QBrush(QColor(220, 60, 60)));
             }
-            m_trackTable->setItem(i, 4, heartItem);
+            m_trackTable->setItem(i, 5, heartItem);
         }
     } else {
         // Library mode: full 6-column layout
@@ -317,14 +379,14 @@ void TrackListWidget::populateTable()
         m_trackTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
         m_trackTable->horizontalHeader()->setStretchLastSection(false);
         m_trackTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Fixed);
-        m_trackTable->setColumnWidth(5, 30);
+        m_trackTable->setColumnWidth(5, 14);
 
         for (int i = 0; i < m_tracks.size(); ++i) {
             auto track = m_tracks[i];
 
             m_trackTable->insertRow(i);
             m_trackTable->setItem(i, 0, new QTableWidgetItem(track->title()));
-            m_trackTable->setItem(i, 1, new QTableWidgetItem(track->artist()));
+            m_trackTable->setItem(i, 1, new QTableWidgetItem(track->displayArtist()));
             m_trackTable->setItem(i, 2, new QTableWidgetItem(track->album()));
             m_trackTable->setItem(i, 3, new QTableWidgetItem(track->durationString()));
 
@@ -375,7 +437,7 @@ void TrackListWidget::updateTrackScrobbleCount(int index)
         ? QString::number(track->userScrobbleCount())
         : (m_mode == QueueMode ? QString() : QString::fromUtf8("\u2014"));
 
-    int scrobbleCol = (m_mode == QueueMode) ? 2 : 4;
+    int scrobbleCol = (m_mode == QueueMode) ? 3 : 4;
     QTableWidgetItem* item = m_trackTable->item(index, scrobbleCol);
     if (item) {
         item->setText(text);
@@ -431,6 +493,19 @@ bool TrackListWidget::eventFilter(QObject* obj, QEvent* event)
         }
     }
 
+    // Clear row hover when mouse leaves the table viewport
+    if (obj == m_trackTable->viewport() && event->type() == QEvent::Leave) {
+        if (m_hoveredRow >= 0 && m_hoveredRow < m_trackTable->rowCount()) {
+            bool isCurrent = (m_hoveredRow < m_tracks.size() && m_tracks[m_hoveredRow]->id() == m_currentTrackId);
+            for (int col = 0; col < m_trackTable->columnCount(); ++col) {
+                QTableWidgetItem* item = m_trackTable->item(m_hoveredRow, col);
+                if (item)
+                    item->setBackground(isCurrent ? QBrush(m_highlightColor) : Qt::transparent);
+            }
+        }
+        m_hoveredRow = -1;
+    }
+
     return QWidget::eventFilter(obj, event);
 }
 
@@ -458,9 +533,7 @@ void TrackListWidget::contextMenuEvent(QContextMenuEvent* event)
         m_trackTable->selectRow(clickedRow);
     }
 
-    // Only show context menu in library mode
-    if (m_mode != LibraryMode)
-        return;
+    std::sort(selectedRows.begin(), selectedRows.end());
 
     // Gather selected tracks
     QList<std::shared_ptr<Track>> selectedTracks;
@@ -479,18 +552,31 @@ void TrackListWidget::contextMenuEvent(QContextMenuEvent* event)
         ? "Track"
         : QString("%1 Tracks").arg(selectedTracks.size());
 
-    QAction* playNextAction = contextMenu.addAction("Play Next");
-    QAction* addToQueueAction = contextMenu.addAction(
-        QString("Add %1 to Queue").arg(trackText)
-    );
+    if (m_mode == QueueMode) {
+        QAction* removeAction = contextMenu.addAction(
+            QString("Remove %1 from Queue").arg(trackText)
+        );
+        connect(removeAction, &QAction::triggered, [this, selectedRows]() {
+            if (selectedRows.size() == 1) {
+                emit removeRequested(selectedRows.first());
+            } else {
+                emit removeMultipleRequested(selectedRows);
+            }
+        });
+    } else {
+        QAction* playNextAction = contextMenu.addAction("Play Next");
+        QAction* addToQueueAction = contextMenu.addAction(
+            QString("Add %1 to Queue").arg(trackText)
+        );
 
-    connect(playNextAction, &QAction::triggered, [this, selectedTracks]() {
-        emit playNextRequested(selectedTracks);
-    });
+        connect(playNextAction, &QAction::triggered, [this, selectedTracks]() {
+            emit playNextRequested(selectedTracks);
+        });
 
-    connect(addToQueueAction, &QAction::triggered, [this, selectedTracks]() {
-        emit addToQueueRequested(selectedTracks);
-    });
+        connect(addToQueueAction, &QAction::triggered, [this, selectedTracks]() {
+            emit addToQueueRequested(selectedTracks);
+        });
+    }
 
     contextMenu.exec(event->globalPos());
 }

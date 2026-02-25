@@ -20,6 +20,13 @@ Track::Track(const QString& id, const QString& title, const QString& artist,
 {
 }
 
+QString Track::displayArtist() const
+{
+    if (m_featuredArtists.isEmpty())
+        return m_artist;
+    return m_artist + ", " + m_featuredArtists.join(", ");
+}
+
 QString Track::durationString() const
 {
     int minutes = m_duration / 60;

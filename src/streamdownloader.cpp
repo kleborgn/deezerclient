@@ -22,7 +22,7 @@ StreamDownloader::~StreamDownloader()
     }
 }
 
-void StreamDownloader::startDownload(const QString& url, const QString& trackId)
+void StreamDownloader::startProgressiveDownload(const QString& url, const QString& trackId)
 {
     if (m_reply) {
         QNetworkReply* oldReply = m_reply;
@@ -36,20 +36,39 @@ void StreamDownloader::startDownload(const QString& url, const QString& trackId)
     req.setRawHeader("User-Agent", USER_AGENT);
     m_reply = m_nam->get(req);
     m_reply->setProperty("trackId", trackId);
-    connect(m_reply, &QNetworkReply::finished, this, &StreamDownloader::onReplyFinished);
+    connect(m_reply, &QNetworkReply::readyRead, this, &StreamDownloader::onReadyRead);
+    connect(m_reply, &QNetworkReply::finished, this, &StreamDownloader::onProgressiveReplyFinished);
 }
 
-void StreamDownloader::onReplyFinished()
+void StreamDownloader::onReadyRead()
+{
+    QNetworkReply* reply = qobject_cast<QNetworkReply*>(sender());
+    if (!reply || reply != m_reply) return;
+
+    QByteArray chunk = reply->readAll();
+    if (!chunk.isEmpty()) {
+        QString trackId = reply->property("trackId").toString();
+        emit chunkReady(chunk, trackId);
+    }
+}
+
+void StreamDownloader::onProgressiveReplyFinished()
 {
     QNetworkReply* reply = qobject_cast<QNetworkReply*>(sender());
     if (!reply) return;
     m_reply = nullptr;
-    reply->deleteLater();
+
+    // Emit any remaining data
+    QByteArray remaining = reply->readAll();
+    QString trackId = reply->property("trackId").toString();
+    if (!remaining.isEmpty()) {
+        emit chunkReady(remaining, trackId);
+    }
 
     QString err;
     if (reply->error() != QNetworkReply::NoError)
         err = reply->errorString();
-    QByteArray data = reply->readAll();
-    QString trackId = reply->property("trackId").toString();
-    emit downloadReady(data, err, trackId);
+
+    reply->deleteLater();
+    emit progressiveDownloadFinished(err, trackId);
 }

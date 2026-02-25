@@ -177,7 +177,7 @@ void DiscordManager::onReadyRead()
             return;
         }
 
-        emit debugLog(QString("[Discord] Received Opcode %1: %2").arg(opcode).arg(jsonStr));
+        //emit debugLog(QString("[Discord] Received Opcode %1: %2").arg(opcode).arg(jsonStr));
         
         // Check for READY event
         if (response.contains("evt") && response["evt"].toString() == "READY") {

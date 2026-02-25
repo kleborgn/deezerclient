@@ -26,6 +26,8 @@ public:
     void clearTracks();
     void setSearchVisible(bool visible);
     void setCurrentTrackId(const QString& id);
+    void setHighlightColor(const QColor& color);
+    void setHoverColor(const QColor& color);
     void setMode(Mode mode);
     void updateTrackScrobbleCount(int index);  // Update scrobble count for single track
     const QList<std::shared_ptr<Track>>& tracks() const { return m_tracks; }
@@ -57,6 +59,7 @@ private slots:
     void onTableDoubleClicked(int row, int column);
     void onCellClicked(int row, int column);
     void onSelectionChanged();
+    void onCellEntered(int row, int column);
 
 private:
     void setupUI();
@@ -70,6 +73,10 @@ private:
     QTableWidget* m_trackTable;
 
     Mode m_mode = LibraryMode;
+    QColor m_highlightColor = QColor(60, 60, 100);
+    QColor m_hoverColor = QColor(50, 50, 70);
+    QString m_currentTrackId;
+    int m_hoveredRow = -1;
 };
 
 #endif // TRACKLISTWIDGET_H

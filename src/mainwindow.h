@@ -8,7 +8,10 @@
 #include <QThread>
 #include <QSettings>
 #include <QCloseEvent>
+#include <QResizeEvent>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QColor>
 #include <memory>
 #include "audioengine.h"
 #include "deezerapi.h"
@@ -20,6 +23,8 @@
 #include "discordmanager.h"
 #include "queueheaderwidget.h"
 #include "projectmwindow.h"
+#include "recentwidget.h"
+#include <QListWidget>
 
 class QDialog;
 class QPlainTextEdit;
@@ -88,6 +93,7 @@ private slots:
     void onToggleSpectrumClicked(bool checked);
     void onToggleLyricsClicked(bool checked);
     void onLastFmSettingsClicked();
+    void onAudioSettingsClicked();
 
     // Authentication
     void onAuthenticated(const QString& username);
@@ -132,6 +138,11 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
 
 private:
     void setupUI();
@@ -141,7 +152,9 @@ private:
     void loadSettings();
     void saveSettings();
     void autoLogin();
-    
+    QColor extractDominantColor(const QPixmap& pixmap);
+    void updateAppBackground();
+
     // Core components
     AudioEngine* m_audioEngine;
     DeezerAPI* m_deezerAPI;
@@ -152,14 +165,24 @@ private:
     QTabWidget* m_tabWidget;
 
     // Library tab widgets
+    RecentWidget* m_recentWidget;
     PlaylistWidget* m_playlistWidget;
     AlbumListWidget* m_albumWidget;
     SearchWidget* m_searchWidget;
     TrackListWidget* m_trackListWidget;
     PlayerControls* m_libraryPlayerControls;
     
+    // Mix tab widgets
+    QPushButton* m_flowButton;
+    QPushButton* m_mixRefreshButton;
+    QLabel* m_mixesLabel;
+    QListWidget* m_mixListWidget;
+    QList<std::shared_ptr<Track>> m_mixSeedTracks;
+    QNetworkAccessManager* m_mixImageManager;
+
     // Now Playing tab widgets
     AspectRatioLabel* m_largeAlbumArtLabel;
+    QSplitter* m_nowPlayingSplitter;
     TrackListWidget* m_queueWidget;
     QueueHeaderWidget* m_queueHeader;
     PlayerControls* m_nowPlayingPlayerControls;
@@ -175,6 +198,7 @@ private:
     QAction* m_spectrumAction;
     QAction* m_lyricsAction;
     QAction* m_lastFmSettingsAction;
+    QAction* m_audioSettingsAction;
 
     // Current state
     QList<std::shared_ptr<Track>> m_currentQueue;
@@ -198,6 +222,16 @@ private:
     QList<QPair<QString, QString>> m_pendingScrobbleFetches;  // (artist, track) pairs to fetch
     int m_scrobbleFetchIndex = 0;
     std::shared_ptr<Album> m_currentAlbumForScrobble;  // Track current album for header scrobble count
+
+    // Dynamic background color
+    QColor m_albumDominantColor;
+
+    // Flow mode
+    bool m_flowMode = false;
+
+    // Frameless window dragging
+    QPoint m_dragPos;
+    bool m_dragging = false;
 };
 
 #endif // MAINWINDOW_H

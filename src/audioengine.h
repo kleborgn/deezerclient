@@ -5,15 +5,15 @@
 #include <QQueue>
 #include <QByteArray>
 #include <QVector>
+#include <QMutex>
 #include <QRecursiveMutex>
 #include <atomic>
 #include <memory>
+#include <QElapsedTimer>
 #include "track.h"
 
 class QTimer;
 class QThread;
-class QNetworkAccessManager;
-class QNetworkReply;
 class DeezerAPI;
 class StreamDownloader;
 
@@ -36,6 +36,21 @@ public:
         RepeatOff,
         RepeatOne,
         RepeatAll
+    };
+
+    enum OutputMode {
+        OutputDirectSound,
+        OutputWasapiShared,
+        OutputWasapiExclusive
+    };
+
+    struct AudioDevice {
+        int index;
+        QString name;
+        DWORD mixfreq;
+        DWORD mixchans;
+        DWORD type;
+        bool isDefault;
     };
 
     explicit AudioEngine(QObject *parent = nullptr);
@@ -86,25 +101,29 @@ public:
     QString contextType() const { return m_contextType; }
     QString contextId() const { return m_contextId; }
     QList<std::shared_ptr<Track>> queue() const;
-    double position() const; // 0.0 to 1.0
     int positionSeconds() const;
     int durationSeconds() const;
     
     // Gapless playback settings
     void setGaplessEnabled(bool enabled) { m_gaplessEnabled = enabled; }
-    bool isGaplessEnabled() const { return m_gaplessEnabled; }
-    
+
     // Manual preloading (e.g., triggered by UI hover)
     void preloadNextTrack();
-    bool isNextPreloaded() const { return m_preloadReady || m_preloadStream != 0; }
+    bool isNextPreloaded() const { return m_preloadReady; }
+
+    // Output mode (DirectSound / WASAPI Shared / WASAPI Exclusive)
+    void setOutputMode(OutputMode mode, int wasapiDevice = -1);
+    bool reinitialize(OutputMode mode, int wasapiDevice = -1);
+    OutputMode outputMode() const { return m_outputMode; }
+    int wasapiDeviceIndex() const { return m_wasapiDevice; }
+    DWORD outputSampleRate() const { return m_outputSampleRate; }
+    static QList<AudioDevice> enumerateWasapiDevices();
 
 signals:
     void stateChanged(PlaybackState state);
     void trackChanged(std::shared_ptr<Track> track);
     void queueChanged();
     void positionChanged(int seconds);
-    void volumeChanged(float volume);
-    void trackEnded();
     void streamInfoChanged(const QString& info); // e.g. "FLAC | 1411 kbps | 44100 Hz | stereo"
     void waveformReady(const QVector<float>& peaks);
     void positionTick(double position); // 0.0-1.0, emitted every ~100ms for smooth waveform playhead
@@ -121,22 +140,28 @@ public slots:
 private slots:
     void updatePosition();
     void updateSpectrum();
-    void onDownloadFinished();
-    void onDownloadTimeout();
-    void onDownloadDataReady(const QByteArray& data, const QString& errorMessage, const QString& trackId);
+    void onStreamChunkReady(const QByteArray& chunk, const QString& trackId);
+    void onProgressiveDownloadFinished(const QString& errorMessage, const QString& trackId);
+    void onPreloadChunkReady(const QByteArray& chunk, const QString& trackId);
+    void onPreloadDownloadFinished(const QString& errorMessage, const QString& trackId);
     void handleStreamEnd(DWORD streamHandle);
     void handleNearEnd();
-    void handleMixerEnd();
     void handleStreamDequeued(DWORD streamHandle, int generation);
 
 private:
     // BASS callbacks
     static void CALLBACK syncEndCallback(HSYNC handle, DWORD channel, DWORD data, void* user);
     static void CALLBACK syncNearEndCallback(HSYNC handle, DWORD channel, DWORD data, void* user);
-    static void CALLBACK mixerEndCallback(HSYNC handle, DWORD channel, DWORD data, void* user);
     static void CALLBACK queueSyncCallback(HSYNC handle, DWORD channel, DWORD data, void* user);
 
+    // BASS FILEPROCS for STREAMFILE_BUFFERPUSH (progressive streaming)
+    static void CALLBACK pushStreamClose(void* user);
+    static QWORD CALLBACK pushStreamLength(void* user);
+    static DWORD CALLBACK pushStreamRead(void* buffer, DWORD length, void* user);
+    static BOOL CALLBACK pushStreamSeek(QWORD offset, void* user);
+
     // Internal methods
+    double position() const; // 0.0 to 1.0 (used internally by updatePosition, reinitialize)
     void setState(PlaybackState state);
     void startLoadingUrl(const QString& url);
     bool createStream(const QString& url);
@@ -144,9 +169,14 @@ private:
     void addStreamToMixer(const QByteArray& data);
     void updateStreamInfo(HSTREAM stream);
     void setupStreamSyncs(HSTREAM stream, HSYNC* endSyncPtr, HSYNC* nearEndSyncPtr);
-    void setupStreamSync(HSTREAM stream, HSYNC* syncPtr);
     void destroyStream();
     void startWaveformComputation();
+
+    // Output mode helpers (abstract DirectSound vs WASAPI)
+    bool startMixerOutput();   // BASS_ChannelPlay or BASS_WASAPI_Start
+    bool isOutputActive();     // BASS_ChannelIsActive or BASS_WASAPI_IsStarted
+    void stopMixerOutput();    // BASS_ChannelStop or BASS_WASAPI_Stop
+    bool ensureOutputRate(DWORD sourceFreq);  // Exclusive mode: switch WASAPI+mixer to match track rate
     
     HSTREAM m_mixerStream;        // Persistent mixer output with BASS_MIXER_QUEUE
     HSTREAM m_currentStream;      // Currently playing source (for position tracking)
@@ -181,9 +211,6 @@ private:
     QThread* m_downloadThread;
     StreamDownloader* m_streamDownloader;
     StreamDownloader* m_preloadDownloader;
-    QNetworkAccessManager* m_networkManager;
-    QNetworkReply* m_downloadReply;
-    QTimer* m_downloadTimeoutTimer;
     QByteArray m_streamBuffer;
     QString m_currentStreamFormat;  // Format from streamUrlReceived (e.g. MP3_320), for debug file name
 
@@ -194,6 +221,24 @@ private:
     bool m_preloadReady = false;
     HSTREAM m_preloadStream;  // Track the preloaded stream handle for gapless playback
     bool m_listenReported = false;
+
+    // Progressive streaming state
+    HSTREAM m_pushStream = 0;
+    QByteArray m_trackKey;
+    QByteArray m_chunkRemainder;
+    int m_chunkIndex = 0;
+    int m_pushInitialOffset = 0;  // Read cursor into m_streamBuffer for STREAMFILE_BUFFER callback
+    std::atomic<bool> m_progressiveMode{false};
+    bool m_progressivePlaybackStarted = false;
+    qint64 m_totalBytesReceived = 0;
+    QElapsedTimer m_downloadTimer;  // For bandwidth estimation
+    QMutex m_bufferMutex;  // Protects m_streamBuffer between main thread and BASS mixing thread
+    qint64 m_lastWaveformUpdateBytes = 0;  // Track when to trigger next progressive waveform update
+
+    // Output mode
+    OutputMode m_outputMode;
+    int m_wasapiDevice;
+    DWORD m_outputSampleRate;
 
     // Waveform computation (runs on thread pool, generation counter prevents stale results)
     std::atomic<int> m_waveformGeneration{0};

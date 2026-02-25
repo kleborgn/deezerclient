@@ -45,6 +45,8 @@ public:
     static void setTrackXorKey(const QString& key);     // 16-char raw or 32-char hex
     static void setLicenseToken(const QString& token); // Optional override after login
     static QString apiKey() { return s_mobileApiKey; }
+    // Compute the 16-byte Blowfish key for a given trackId (for BF_CBC_STRIPE decryption).
+    static QByteArray computeTrackKey(const QString& trackId);
     // Decrypt BF_CBC_STRIPE stream in-place. Returns true if decryption was applied (key set), false otherwise.
     bool decryptStreamBuffer(QByteArray& data, const QString& trackId) const;
 
@@ -85,6 +87,16 @@ public:
     void removeFavoriteTrack(const QString& trackId, const QString& contextType = QString(), const QString& contextId = QString());
     bool isTrackFavorite(const QString& trackId) const { return m_favoriteTrackIds.contains(trackId); }
 
+    // Recently played
+    void getRecentlyPlayed();
+
+    // User radio (Flow)
+    void getUserRadio();
+
+    // Mixes inspired by... (home page)
+    void getHomeMixes();
+    void getTrackMix(const QString& trackId);
+
     // Listen logging
     void reportListen(const QString& trackId, int duration, const QString& format,
                      const QString& contextType = QString(), const QString& contextId = QString());
@@ -107,6 +119,10 @@ signals:
     void lyricsReceived(const QString& trackId, const QString& lyrics, const QJsonArray& syncedLyrics);
     void favoriteChanged(const QString& trackId, bool isFavorite);
     void favoriteTrackIdsLoaded();
+    void recentlyPlayedReceived(const QJsonArray& items);
+    void userRadioReceived(QList<std::shared_ptr<Track>> tracks);
+    void homeMixesReceived(QList<std::shared_ptr<Track>> tracks);
+    void trackMixReceived(QList<std::shared_ptr<Track>> tracks);
     void error(const QString& errorMessage);
     void debugLog(const QString& message);
 

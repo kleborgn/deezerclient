@@ -2,6 +2,7 @@
 #define TRACK_H
 
 #include <QString>
+#include <QStringList>
 #include <QObject>
 #include <QJsonArray>
 
@@ -19,6 +20,8 @@ public:
     QString id() const { return m_id; }
     QString title() const { return m_title; }
     QString artist() const { return m_artist; }
+    QStringList featuredArtists() const { return m_featuredArtists; }
+    QString displayArtist() const;
     QString album() const { return m_album; }
     int duration() const { return m_duration; }
     QString previewUrl() const { return m_previewUrl; }
@@ -31,11 +34,13 @@ public:
     int userScrobbleCount() const { return m_userScrobbleCount; }
     bool hasScrobbleData() const { return m_scrobbleCount >= 0; }
     bool isFavorite() const { return m_isFavorite; }
+    bool isUserUploaded() const { return m_isUserUploaded; }
 
     // Setters
     void setId(const QString& id) { m_id = id; }
     void setTitle(const QString& title) { m_title = title; }
     void setArtist(const QString& artist) { m_artist = artist; }
+    void setFeaturedArtists(const QStringList& artists) { m_featuredArtists = artists; }
     void setAlbum(const QString& album) { m_album = album; }
     void setDuration(int duration) { m_duration = duration; }
     void setPreviewUrl(const QString& url) { m_previewUrl = url; }
@@ -47,6 +52,7 @@ public:
     void setScrobbleCount(int count) { m_scrobbleCount = count; }
     void setUserScrobbleCount(int count) { m_userScrobbleCount = count; }
     void setFavorite(bool fav) { m_isFavorite = fav; }
+    void setUserUploaded(bool uploaded) { m_isUserUploaded = uploaded; }
 
     // Helper methods
     QString durationString() const;
@@ -55,6 +61,7 @@ private:
     QString m_id;
     QString m_title;
     QString m_artist;
+    QStringList m_featuredArtists;
     QString m_album;
     int m_duration; // in seconds
     QString m_previewUrl;
@@ -66,6 +73,7 @@ private:
     int m_scrobbleCount = -1; // Last.fm scrobble count (-1 = not fetched, 0+ = actual count)
     int m_userScrobbleCount = -1; // User's personal scrobble count
     bool m_isFavorite = false;
+    bool m_isUserUploaded = false;
 };
 
 #endif // TRACK_H

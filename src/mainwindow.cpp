@@ -8,6 +8,7 @@
 #include <QUrl>
 #include <QDialog>
 #include <QTabWidget>
+#include <QTabBar>
 #include <QLineEdit>
 #include <QLabel>
 #include <QPlainTextEdit>
@@ -21,6 +22,7 @@
 #include "lastfmapi.h"
 #include "scrobblecache.h"
 #include "lastfmsettingsdialog.h"
+#include "audiosettingsdialog.h"
 #include <QTimer>
 
 MainWindow::MainWindow(QWidget *parent)
@@ -33,6 +35,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_lastFmAPI(new LastFmAPI(this))
     , m_scrobbleCache(new ScrobbleCache(this))
     , m_scrobbleFetchTimer(new QTimer(this))
+    , m_mixImageManager(new QNetworkAccessManager(this))
 {
     qRegisterMetaType<std::shared_ptr<Track>>("std::shared_ptr<Track>");
     m_discordManager->moveToThread(m_discordThread);
@@ -50,6 +53,17 @@ MainWindow::MainWindow(QWidget *parent)
     m_scrobbleFetchTimer->setSingleShot(true);
     connect(m_scrobbleFetchTimer, &QTimer::timeout, this, &MainWindow::fetchNextBatchOfScrobbles);
 
+    // Load audio output mode before initializing the engine
+    {
+        QSettings settings;
+        int outputMode = settings.value("Audio/outputMode", 0).toInt();
+        int wasapiDevice = settings.value("Audio/wasapiDeviceIndex", -1).toInt();
+        if (outputMode >= 0 && outputMode <= 2) {
+            m_audioEngine->setOutputMode(
+                static_cast<AudioEngine::OutputMode>(outputMode), wasapiDevice);
+        }
+    }
+
     // Initialize audio engine and wire for full-track playback
     if (!m_audioEngine->initialize()) {
         QMessageBox::critical(this, "Error", "Failed to initialize audio engine");
@@ -60,7 +74,7 @@ MainWindow::MainWindow(QWidget *parent)
     loadSettings();
     autoLogin();
 
-    setWindowTitle("Deezer Client - Native Desktop");
+    setWindowFlags(Qt::FramelessWindowHint);
     resize(1200, 700);
 }
 
@@ -78,7 +92,15 @@ void MainWindow::setupUI()
     QVBoxLayout* mainLayout = new QVBoxLayout(centralWidget);
     
     m_tabWidget = new QTabWidget(this);
-    
+    m_tabWidget->setStyleSheet(
+        "QTabBar::tab { padding: 4px 12px; font-size: 11px; }"
+        "QTabBar::tab:selected { font-weight: bold; }"
+    );
+
+    // --- TAB 0: RECENT ---
+    m_recentWidget = new RecentWidget(this);
+    m_recentWidget->setDeezerAPI(m_deezerAPI);
+
     // --- TAB 1: LIBRARY ---
     QWidget* libraryTab = new QWidget();
     QVBoxLayout* libraryLayout = new QVBoxLayout(libraryTab);
@@ -113,7 +135,64 @@ void MainWindow::setupUI()
     m_searchWidget->setDeezerAPI(m_deezerAPI);
     searchLayout->addWidget(m_searchWidget);
 
-    // --- TAB 4: NOW PLAYING ---
+    // --- TAB 4: MIX ---
+    QWidget* mixTab = new QWidget();
+    QVBoxLayout* mixLayout = new QVBoxLayout(mixTab);
+    mixLayout->setContentsMargins(10, 10, 10, 10);
+    mixLayout->setSpacing(10);
+
+    m_flowButton = new QPushButton("Flow", mixTab);
+    m_flowButton->setFixedSize(200, 60);
+    m_flowButton->setStyleSheet(
+        "QPushButton { font-size: 18px; font-weight: bold; border-radius: 30px; "
+        "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6C3483, stop:1 #2980B9); "
+        "color: white; border: none; }"
+        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7D3C98, stop:1 #3498DB); }"
+        "QPushButton:pressed { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #5B2C6F, stop:1 #2471A3); }"
+    );
+    mixLayout->addWidget(m_flowButton, 0, Qt::AlignCenter);
+
+    // "Mixes inspired by..." label + refresh button
+    QHBoxLayout* mixesHeaderLayout = new QHBoxLayout();
+    m_mixesLabel = new QLabel("Mixes inspired by...", mixTab);
+    QFont mixesFont = m_mixesLabel->font();
+    mixesFont.setPointSize(14);
+    mixesFont.setBold(true);
+    m_mixesLabel->setFont(mixesFont);
+    m_mixesLabel->setStyleSheet("color: white; padding: 4px 0;");
+    mixesHeaderLayout->addWidget(m_mixesLabel);
+
+    m_mixRefreshButton = new QPushButton("Refresh", mixTab);
+    m_mixRefreshButton->setFixedSize(80, 28);
+    m_mixRefreshButton->setStyleSheet(
+        "QPushButton { font-size: 12px; border-radius: 14px; "
+        "background: #333; color: #ccc; border: 1px solid #555; }"
+        "QPushButton:hover { background: #444; color: white; }"
+    );
+    mixesHeaderLayout->addWidget(m_mixRefreshButton);
+    mixesHeaderLayout->addStretch();
+    mixLayout->addLayout(mixesHeaderLayout);
+
+    // Grid of mix seed tracks
+    m_mixListWidget = new QListWidget(mixTab);
+    m_mixListWidget->setViewMode(QListView::IconMode);
+    m_mixListWidget->setFlow(QListView::LeftToRight);
+    m_mixListWidget->setWrapping(true);
+    m_mixListWidget->setResizeMode(QListView::Adjust);
+    m_mixListWidget->setMovement(QListView::Static);
+    m_mixListWidget->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_mixListWidget->setIconSize(QSize(120, 120));
+    m_mixListWidget->setGridSize(QSize(140, 170));
+    m_mixListWidget->setSpacing(8);
+    m_mixListWidget->setStyleSheet(
+        "QListWidget { background: transparent; border: none; }"
+        "QListWidget::item { color: #ccc; border-radius: 4px; padding: 4px; }"
+        "QListWidget::item:hover { background: rgba(255,255,255,20); }"
+        "QListWidget::item:selected { background: rgba(162,56,255,40); }"
+    );
+    mixLayout->addWidget(m_mixListWidget, 1);
+
+    // --- TAB 5: NOW PLAYING ---
     QWidget* nowPlayingTab = new QWidget();
     QVBoxLayout* nowPlayingLayout = new QVBoxLayout(nowPlayingTab);
     nowPlayingLayout->setContentsMargins(0, 0, 0, 0);
@@ -141,27 +220,36 @@ void MainWindow::setupUI()
     rightLayout->addWidget(m_queueWidget, 1);
 
     // Use QSplitter for resizable left/right split
-    QSplitter* splitter = new QSplitter(Qt::Horizontal, nowPlayingTab);
-    splitter->addWidget(m_largeAlbumArtLabel);
-    splitter->addWidget(rightPanel);
-    splitter->setSizes({500, 500});
-    splitter->setChildrenCollapsible(false);
+    m_nowPlayingSplitter = new QSplitter(Qt::Horizontal, nowPlayingTab);
+    m_nowPlayingSplitter->addWidget(m_largeAlbumArtLabel);
+    m_nowPlayingSplitter->addWidget(rightPanel);
+    m_nowPlayingSplitter->setSizes({500, 500});
+    m_nowPlayingSplitter->setChildrenCollapsible(false);
+    m_nowPlayingSplitter->setHandleWidth(0);
+    m_nowPlayingSplitter->installEventFilter(this);
 
     m_nowPlayingPlayerControls = new PlayerControls(nowPlayingTab);
     m_nowPlayingPlayerControls->setAudioEngine(m_audioEngine);
 
-    nowPlayingLayout->addWidget(splitter, 1);
+    nowPlayingLayout->addWidget(m_nowPlayingSplitter, 1);
     nowPlayingLayout->addWidget(m_nowPlayingPlayerControls);
     
     // Add tabs
+    m_tabWidget->addTab(m_recentWidget, "Recent");
     m_tabWidget->addTab(libraryTab, "Playlists");
     m_tabWidget->addTab(albumsTab, "Albums");
     m_tabWidget->addTab(searchTab, "Search");
+    m_tabWidget->addTab(mixTab, "Mix");
     m_tabWidget->addTab(nowPlayingTab, "Now Playing");
     
     // Add to main layout
     mainLayout->addWidget(m_tabWidget);
-    
+
+    // Dynamic background: tint to album art color when on Now Playing tab
+    connect(m_tabWidget, &QTabWidget::currentChanged, this, [this](int) {
+        updateAppBackground();
+    });
+
     setCentralWidget(centralWidget);
     
     // Status bar
@@ -170,58 +258,102 @@ void MainWindow::setupUI()
 
 void MainWindow::setupMenus()
 {
-    // File menu
-    m_fileMenu = menuBar()->addMenu("&File");
-    
-    m_loginAction = m_fileMenu->addAction("&Login to Deezer");
-    m_logoutAction = m_fileMenu->addAction("Log&out");
+    // Hide the standard menu bar — everything goes into a single popup menu
+    menuBar()->hide();
+
+    // Build the popup menu with File / Settings / Help submenus
+    QMenu* appMenu = new QMenu(this);
+
+    m_fileMenu = appMenu->addMenu("File");
+    m_loginAction = m_fileMenu->addAction("Login to Deezer");
+    m_logoutAction = m_fileMenu->addAction("Logout");
     m_logoutAction->setEnabled(false);
-    
     m_fileMenu->addSeparator();
-    
-    QAction* quitAction = m_fileMenu->addAction("&Quit");
+    QAction* quitAction = m_fileMenu->addAction("Quit");
     quitAction->setShortcut(QKeySequence::Quit);
-    
-    // Settings menu
-    m_settingsMenu = menuBar()->addMenu("&Settings");
-    
-    m_gaplessAction = m_settingsMenu->addAction("&Gapless Playback");
+
+    m_settingsMenu = appMenu->addMenu("Settings");
+    m_gaplessAction = m_settingsMenu->addAction("Gapless Playback");
     m_gaplessAction->setCheckable(true);
     m_gaplessAction->setChecked(true);
-    
-    m_discordRpcAction = m_settingsMenu->addAction("&Discord Presence");
+    m_discordRpcAction = m_settingsMenu->addAction("Discord Presence");
     m_discordRpcAction->setCheckable(true);
     m_discordRpcAction->setChecked(true);
-
-    m_spectrumAction = m_settingsMenu->addAction("&Spectrum Visualizer");
+    m_spectrumAction = m_settingsMenu->addAction("Spectrum Visualizer");
     m_spectrumAction->setCheckable(true);
     m_spectrumAction->setChecked(false);
-
-    m_lyricsAction = m_settingsMenu->addAction("L&yrics");
+    m_lyricsAction = m_settingsMenu->addAction("Lyrics");
     m_lyricsAction->setCheckable(true);
     m_lyricsAction->setChecked(false);
-
-    QAction* projectMAction = m_settingsMenu->addAction("&projectM Visualizer");
+    QAction* projectMAction = m_settingsMenu->addAction("projectM Visualizer");
     connect(projectMAction, &QAction::triggered, this, [this]() {
         if (!m_projectMWindow) {
-            m_projectMWindow = new ProjectMWindow(nullptr);  // No parent to avoid main window repaint
+            m_projectMWindow = new ProjectMWindow(nullptr);
             m_projectMWindow->setAudioEngine(m_audioEngine);
             connect(m_projectMWindow, &ProjectMWindow::debugLog, this, &MainWindow::onDebugLog);
         }
         m_projectMWindow->show();
         m_projectMWindow->raise();
     });
-
     m_settingsMenu->addSeparator();
-    m_lastFmSettingsAction = m_settingsMenu->addAction("&Last.fm Settings...");
+    m_lastFmSettingsAction = m_settingsMenu->addAction("Last.fm Settings...");
     connect(m_lastFmSettingsAction, &QAction::triggered, this, &MainWindow::onLastFmSettingsClicked);
+    m_audioSettingsAction = m_settingsMenu->addAction("Audio Output...");
+    connect(m_audioSettingsAction, &QAction::triggered, this, &MainWindow::onAudioSettingsClicked);
 
-    // Help menu
-    m_helpMenu = menuBar()->addMenu("&Help");
-    
-    QAction* debugLogAction = m_helpMenu->addAction("View &debug log");
-    QAction* aboutAction = m_helpMenu->addAction("&About");
-    
+    m_helpMenu = appMenu->addMenu("Help");
+    QAction* debugLogAction = m_helpMenu->addAction("View debug log");
+    QAction* aboutAction = m_helpMenu->addAction("About");
+
+    // Measure actual tab height so corner widgets match exactly
+    int tabH = m_tabWidget->tabBar()->sizeHint().height();
+    QString btnBase = QString(
+        "font-family: 'Segoe MDL2 Assets'; color: #ccc; font-size: 11px;"
+        "min-height: %1px; padding: 0px %2px; border: none;");
+
+    // "Menu" button — left corner of tab widget (Segoe MDL2 Assets: GlobalNavigationButton)
+    QPushButton* menuButton = new QPushButton(QChar(0xE700), m_tabWidget);
+    menuButton->setFlat(true);
+    menuButton->setCursor(Qt::ArrowCursor);
+    menuButton->setStyleSheet(
+        QString("QPushButton { %1 } QPushButton:hover { background: rgba(255,255,255,0.15); }").arg(btnBase.arg(tabH).arg(12)));
+    connect(menuButton, &QPushButton::clicked, this, [menuButton, appMenu]() {
+        appMenu->exec(menuButton->mapToGlobal(QPoint(0, menuButton->height())));
+    });
+    m_tabWidget->setCornerWidget(menuButton, Qt::TopLeftCorner);
+
+    // Window control buttons — right corner of tab widget (Segoe MDL2 Assets: Chrome*)
+    QWidget* windowButtons = new QWidget(m_tabWidget);
+    QHBoxLayout* btnLayout = new QHBoxLayout(windowButtons);
+    btnLayout->setContentsMargins(0, 0, 2, 0);
+    btnLayout->setSpacing(0);
+
+    auto makeBtn = [&](const QChar& icon) {
+        QPushButton* btn = new QPushButton(icon, windowButtons);
+        btn->setFlat(true);
+        btn->setCursor(Qt::ArrowCursor);
+        btn->setStyleSheet(
+            QString("QPushButton { %1 } QPushButton:hover { background: rgba(255,255,255,0.15); }").arg(btnBase.arg(tabH).arg(14)));
+        return btn;
+    };
+
+    QPushButton* minimizeBtn = makeBtn(QChar(0xE921));  // ChromeMinimize
+    QPushButton* maximizeBtn = makeBtn(QChar(0xE922));  // ChromeMaximize
+    QPushButton* closeBtn = makeBtn(QChar(0xE8BB));     // ChromeClose
+    closeBtn->setStyleSheet(
+        QString("QPushButton { %1 } QPushButton:hover { background: #e81123; color: white; }").arg(btnBase.arg(tabH).arg(14)));
+
+    btnLayout->addWidget(minimizeBtn);
+    btnLayout->addWidget(maximizeBtn);
+    btnLayout->addWidget(closeBtn);
+    m_tabWidget->setCornerWidget(windowButtons, Qt::TopRightCorner);
+
+    connect(minimizeBtn, &QPushButton::clicked, this, &QMainWindow::showMinimized);
+    connect(maximizeBtn, &QPushButton::clicked, this, [this]() {
+        isMaximized() ? showNormal() : showMaximized();
+    });
+    connect(closeBtn, &QPushButton::clicked, this, &QMainWindow::close);
+
     // Connect menu actions
     connect(m_loginAction, &QAction::triggered, this, &MainWindow::onLoginClicked);
     connect(m_logoutAction, &QAction::triggered, this, &MainWindow::onLogoutClicked);
@@ -242,6 +374,15 @@ void MainWindow::createConnections()
     connect(m_deezerAPI, &DeezerAPI::error, this, &MainWindow::onError);
     connect(m_deezerAPI, &DeezerAPI::debugLog, this, &MainWindow::onDebugLog);
     connect(this, &MainWindow::debugLog, this, &MainWindow::onDebugLog);
+
+    // Recent
+    connect(m_recentWidget, &RecentWidget::albumDoubleClicked, this, [this](const QString& id) {
+        m_deezerAPI->getAlbum(id);
+    });
+    connect(m_recentWidget, &RecentWidget::playlistDoubleClicked, this, [this](const QString& id) {
+        m_deezerAPI->getPlaylist(id);
+    });
+    connect(m_recentWidget, &RecentWidget::debugLog, this, &MainWindow::onDebugLog);
 
     // Playlist
     connect(m_playlistWidget, &PlaylistWidget::playlistDoubleClicked, this, &MainWindow::onPlaylistDoubleClicked);
@@ -277,6 +418,98 @@ void MainWindow::createConnections()
         m_audioEngine->addToQueue(tracks, insertPos);
     });
 
+    // Mix refresh
+    connect(m_mixRefreshButton, &QPushButton::clicked, this, [this]() {
+        m_deezerAPI->getHomeMixes();
+        statusBar()->showMessage("Refreshing mixes...");
+    });
+
+    // Mix / Flow
+    connect(m_flowButton, &QPushButton::clicked, this, [this]() {
+        m_flowMode = true;
+        m_deezerAPI->getUserRadio();
+        statusBar()->showMessage("Loading Flow...");
+    });
+    connect(m_deezerAPI, &DeezerAPI::userRadioReceived, this, [this](QList<std::shared_ptr<Track>> tracks) {
+        if (tracks.isEmpty()) {
+            statusBar()->showMessage("Flow returned no tracks");
+            return;
+        }
+        if (m_flowMode && m_audioEngine->currentTrack()) {
+            // Append to existing queue
+            m_audioEngine->addToQueue(tracks);
+            statusBar()->showMessage(QString("Flow: +%1 tracks").arg(tracks.size()));
+        } else {
+            // Initial Flow start
+            m_flowMode = true;
+            m_audioEngine->setQueue(tracks);
+            m_audioEngine->playAtIndex(0);
+            m_queueHeader->clear();
+            m_currentAlbumForScrobble.reset();
+            m_tabWidget->setCurrentIndex(5); // Switch to "Now Playing" tab
+            statusBar()->showMessage(QString("Flow: %1 tracks").arg(tracks.size()));
+        }
+    });
+
+    // Mixes inspired by...
+    connect(m_deezerAPI, &DeezerAPI::homeMixesReceived, this, [this](QList<std::shared_ptr<Track>> tracks) {
+        m_mixSeedTracks = tracks;
+        m_mixListWidget->clear();
+        int cover = 120;
+        m_mixListWidget->setIconSize(QSize(cover, cover));
+        m_mixListWidget->setGridSize(QSize(cover + 20, cover + 50));
+
+        for (int i = 0; i < tracks.size(); ++i) {
+            auto& t = tracks[i];
+            QString text = t->title() + "\n" + t->artist();
+            auto* item = new QListWidgetItem(text);
+            item->setData(Qt::UserRole, i);
+            item->setSizeHint(QSize(cover + 20, cover + 50));
+            m_mixListWidget->addItem(item);
+
+            // Download cover art
+            QString artUrl = t->albumArt();
+            if (!artUrl.isEmpty()) {
+                QNetworkReply* reply = m_mixImageManager->get(QNetworkRequest(QUrl(artUrl)));
+                connect(reply, &QNetworkReply::finished, this, [this, reply, i, cover]() {
+                    if (reply->error() == QNetworkReply::NoError) {
+                        QPixmap pixmap;
+                        if (pixmap.loadFromData(reply->readAll())) {
+                            QListWidgetItem* item = m_mixListWidget->item(i);
+                            if (item)
+                                item->setIcon(QIcon(pixmap.scaled(cover, cover, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+                        }
+                    }
+                    reply->deleteLater();
+                });
+            }
+        }
+        m_mixesLabel->setVisible(!tracks.isEmpty());
+    });
+
+    connect(m_mixListWidget, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        int idx = item->data(Qt::UserRole).toInt();
+        if (idx >= 0 && idx < m_mixSeedTracks.size()) {
+            auto& track = m_mixSeedTracks[idx];
+            m_deezerAPI->getTrackMix(track->id());
+            statusBar()->showMessage(QString("Loading mix from: %1 - %2").arg(track->title(), track->artist()));
+        }
+    });
+
+    connect(m_deezerAPI, &DeezerAPI::trackMixReceived, this, [this](QList<std::shared_ptr<Track>> tracks) {
+        if (tracks.isEmpty()) {
+            statusBar()->showMessage("Mix returned no tracks");
+            return;
+        }
+        m_flowMode = false;
+        m_audioEngine->setQueue(tracks);
+        m_audioEngine->playAtIndex(0);
+        m_queueHeader->clear();
+        m_currentAlbumForScrobble.reset();
+        m_tabWidget->setCurrentIndex(5); // Switch to "Now Playing" tab
+        statusBar()->showMessage(QString("Mix: %1 tracks").arg(tracks.size()));
+    });
+
     // Player controls (Now Playing only - Library player controls removed)
     connect(m_nowPlayingPlayerControls, &PlayerControls::playClicked, this, &MainWindow::onPlayClicked);
     connect(m_nowPlayingPlayerControls, &PlayerControls::pauseClicked, this, &MainWindow::onPauseClicked);
@@ -297,6 +530,10 @@ void MainWindow::createConnections()
     // Sync queue widget in Now Playing tab
     connect(m_audioEngine, &AudioEngine::trackChanged, [this](std::shared_ptr<Track> track) {
         if (track) m_queueWidget->setCurrentTrackId(track->id());
+        // Flow: auto-fetch more tracks when reaching the last song
+        if (m_flowMode && m_audioEngine->currentIndex() >= m_audioEngine->queue().size() - 1) {
+            m_deezerAPI->getUserRadio();
+        }
     });
     connect(m_audioEngine, &AudioEngine::queueChanged, [this]() {
         m_queueWidget->setTracks(m_audioEngine->queue());
@@ -336,6 +573,8 @@ void MainWindow::createConnections()
     connect(m_audioEngine, &AudioEngine::trackChanged, this, [this](std::shared_ptr<Track> track) {
         if (track) {
             QString artUrl = track->albumArt();
+            // Request higher resolution for the large Now Playing album art
+            artUrl.replace("1000x1000", "1900x1900");
             if (!artUrl.isEmpty()) {
                 QNetworkReply* reply = m_imageManager->get(QNetworkRequest(QUrl(artUrl)));
                 connect(reply, &QNetworkReply::finished, [this, reply]() {
@@ -344,6 +583,8 @@ void MainWindow::createConnections()
                         QPixmap pixmap;
                         if (pixmap.loadFromData(data)) {
                             m_largeAlbumArtLabel->setPixmap(pixmap);
+                            m_albumDominantColor = extractDominantColor(pixmap);
+                            updateAppBackground();
                         }
                     }
                     reply->deleteLater();
@@ -351,10 +592,14 @@ void MainWindow::createConnections()
             } else {
                 m_largeAlbumArtLabel->setPixmap(QPixmap());
                 m_largeAlbumArtLabel->setText("No Art");
+                m_albumDominantColor = QColor();
+                updateAppBackground();
             }
         } else {
             m_largeAlbumArtLabel->setPixmap(QPixmap());
             m_largeAlbumArtLabel->setText("No Track Playing");
+            m_albumDominantColor = QColor();
+            updateAppBackground();
         }
     });
 
@@ -714,9 +959,11 @@ void MainWindow::onAuthenticated(const QString& username)
     settings.remove("Authentication/rememberMe");
 
     // Load user data
+    m_recentWidget->refresh();
     m_deezerAPI->getUserPlaylists();
     m_deezerAPI->getUserAlbums();
     m_deezerAPI->fetchFavoriteTrackIds();
+    m_deezerAPI->getHomeMixes();
 }
 
 void MainWindow::onAuthenticationFailed(const QString& error)
@@ -754,6 +1001,7 @@ void MainWindow::onTrackDoubleClicked(std::shared_ptr<Track> track)
         int idx = allTracks.indexOf(track);
 
         if (idx >= 0) {
+            m_flowMode = false;
             m_audioEngine->setQueue(allTracks);
             m_audioEngine->playAtIndex(idx);
         } else {
@@ -765,12 +1013,13 @@ void MainWindow::onTrackDoubleClicked(std::shared_ptr<Track> track)
         // Play single track
         m_audioEngine->loadTrack(track);
     }
-    m_tabWidget->setCurrentIndex(3); // Switch to "Now Playing" tab
+    m_tabWidget->setCurrentIndex(5); // Switch to "Now Playing" tab
     statusBar()->showMessage("Playing: " + track->title() + " - " + track->artist());
 }
 
 void MainWindow::onTracksSelected(QList<std::shared_ptr<Track>> tracks)
 {
+    m_flowMode = false;
     m_currentQueue = tracks;
     m_audioEngine->setQueue(tracks);
 }
@@ -801,10 +1050,11 @@ void MainWindow::onPlaylistReceived(std::shared_ptr<Playlist> playlist)
         // Load playlist into queue and start playing
         const auto& tracks = playlist->tracks();
         if (!tracks.isEmpty()) {
+            m_flowMode = false;
             m_audioEngine->setQueue(tracks, "profile_playlists", playlist->id());
             m_audioEngine->playAtIndex(0);
             m_queueHeader->setPlaylist(playlist);
-            m_tabWidget->setCurrentIndex(3); // Switch to "Now Playing" tab
+            m_tabWidget->setCurrentIndex(5); // Switch to "Now Playing" tab
 
             // Clear album reference since this is a playlist
             m_currentAlbumForScrobble.reset();
@@ -840,10 +1090,11 @@ void MainWindow::onAlbumReceived(std::shared_ptr<Album> album, QList<std::shared
 
         // Load album into queue and start playing
         if (!tracks.isEmpty()) {
+            m_flowMode = false;
             m_audioEngine->setQueue(tracks, "album_page", album->id());
             m_audioEngine->playAtIndex(0);
             m_queueHeader->setAlbum(album);
-            m_tabWidget->setCurrentIndex(3); // Switch to "Now Playing" tab
+            m_tabWidget->setCurrentIndex(5); // Switch to "Now Playing" tab
 
             // Track current album for Last.fm scrobble count
             m_currentAlbumForScrobble = album;
@@ -871,7 +1122,7 @@ void MainWindow::onTrackReceived(std::shared_ptr<Track> track)
         emit debugLog("[MainWindow] Playing fetched track");
         // Now that we have the full track details with TRACK_TOKEN, play it
         m_audioEngine->loadTrack(track);
-        m_tabWidget->setCurrentIndex(3); // Switch to "Now Playing" tab
+        m_tabWidget->setCurrentIndex(5); // Switch to "Now Playing" tab
         statusBar()->showMessage("Playing: " + track->title() + " - " + track->artist());
     }
 }
@@ -1066,6 +1317,66 @@ void MainWindow::autoLogin()
     m_deezerAPI->signInWithArl(savedArl);
 }
 
+bool MainWindow::eventFilter(QObject* obj, QEvent* event)
+{
+    if (obj == m_nowPlayingSplitter && event->type() == QEvent::Resize) {
+        QResizeEvent* re = static_cast<QResizeEvent*>(event);
+        int h = re->size().height();
+        int w = re->size().width();
+        int leftWidth = qMin(h, w - 250);  // square cover, leave at least 250px for queue
+        if (leftWidth < 100) leftWidth = 100;
+        m_nowPlayingSplitter->setSizes({leftWidth, w - leftWidth});
+    }
+    return QMainWindow::eventFilter(obj, event);
+}
+
+void MainWindow::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton) {
+        // Only drag from the tab bar area (top row with tabs + corner widgets)
+        if (event->position().y() <= m_tabWidget->tabBar()->rect().bottom() + m_tabWidget->y() + 4) {
+            m_dragging = true;
+            m_dragPos = event->globalPosition().toPoint() - frameGeometry().topLeft();
+            event->accept();
+            return;
+        }
+    }
+    QMainWindow::mousePressEvent(event);
+}
+
+void MainWindow::mouseMoveEvent(QMouseEvent* event)
+{
+    if (m_dragging && (event->buttons() & Qt::LeftButton)) {
+        if (isMaximized()) {
+            // Un-maximize and reposition so the cursor stays proportional
+            double ratio = static_cast<double>(m_dragPos.x()) / width();
+            showNormal();
+            m_dragPos.setX(static_cast<int>(width() * ratio));
+            m_dragPos.setY(event->globalPosition().toPoint().y() - frameGeometry().topLeft().y());
+        }
+        move(event->globalPosition().toPoint() - m_dragPos);
+        event->accept();
+        return;
+    }
+    QMainWindow::mouseMoveEvent(event);
+}
+
+void MainWindow::mouseReleaseEvent(QMouseEvent* event)
+{
+    m_dragging = false;
+    QMainWindow::mouseReleaseEvent(event);
+}
+
+void MainWindow::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    if (event->position().y() <= m_tabWidget->tabBar()->rect().bottom() + m_tabWidget->y() + 4) {
+        isMaximized() ? showNormal() : showMaximized();
+        event->accept();
+        return;
+    }
+    QMainWindow::mouseDoubleClickEvent(event);
+}
+
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     saveSettings();
@@ -1110,6 +1421,12 @@ void MainWindow::onLastFmSettingsClicked()
         m_scrobbleCache->clear();
         fetchScrobbleDataForQueue();
     }
+}
+
+void MainWindow::onAudioSettingsClicked()
+{
+    AudioSettingsDialog dialog(m_audioEngine, this);
+    dialog.exec();
 }
 
 void MainWindow::onLastFmAuthenticated(const QString& username)
@@ -1271,6 +1588,89 @@ void MainWindow::fetchNextBatchOfScrobbles()
     // Schedule next batch with 1 second delay (rate limiting)
     if (m_scrobbleFetchIndex < m_pendingScrobbleFetches.size()) {
         m_scrobbleFetchTimer->start(1000);  // 1 second
+    }
+}
+
+QColor MainWindow::extractDominantColor(const QPixmap& pixmap)
+{
+    if (pixmap.isNull())
+        return QColor();
+
+    // Scale down for fast sampling
+    QImage img = pixmap.scaled(50, 50, Qt::IgnoreAspectRatio, Qt::SmoothTransformation).toImage();
+
+    qint64 r = 0, g = 0, b = 0;
+    int count = 0;
+    for (int y = 0; y < img.height(); ++y) {
+        for (int x = 0; x < img.width(); ++x) {
+            QColor c(img.pixel(x, y));
+            r += c.red();
+            g += c.green();
+            b += c.blue();
+            ++count;
+        }
+    }
+
+    if (count == 0)
+        return QColor();
+
+    // Average color, slightly darkened for background
+    QColor avg(r / count, g / count, b / count);
+    return avg;
+}
+
+void MainWindow::updateAppBackground()
+{
+    if (m_tabWidget->currentIndex() == 5 && m_albumDominantColor.isValid()) {
+        QString bgColor = m_albumDominantColor.name();
+
+        // Compute relative luminance to pick readable text colors
+        int r = m_albumDominantColor.red();
+        int g = m_albumDominantColor.green();
+        int b = m_albumDominantColor.blue();
+        double luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+
+        // Primary text: white on dark backgrounds, near-black on bright
+        // Secondary text: slightly dimmed version of primary
+        QString textColor = luminance > 0.5 ? "#111111" : "#f0f0f0";
+        QString dimTextColor = luminance > 0.5 ? "#444444" : "#bbbbbb";
+
+        QString selectColor = m_albumDominantColor.lighter(170).name();
+
+        QString tabBg = m_albumDominantColor.darker(130).name();
+        QString tabSelectedBg = m_albumDominantColor.lighter(120).name();
+
+        setStyleSheet(QString(
+            "QMainWindow, QWidget, QSplitter, QTabWidget::pane, "
+            "QHeaderView, QHeaderView::section, QTableWidget "
+            "{ background-color: %1; color: %2; border: none; }"
+            "QLabel { color: %2; }"
+            "QHeaderView::section { color: %3; border: none; }"
+            "QTableWidget { color: %2; border: none; gridline-color: transparent; }"
+            "QTableWidget::item:selected { background-color: %4; }"
+            "QPushButton, QToolButton, QSlider, QComboBox, QLineEdit, QMenuBar, QMenu "
+            "{ background-color: none; }"
+            "QTabBar::tab { background: %5; color: %3; padding: 4px 12px; font-size: 11px; border: none; }"
+            "QTabBar::tab:selected { background: %6; color: %2; font-weight: bold; }"
+            "QTabBar::tab:hover { background: %6; }"
+        ).arg(bgColor, textColor, dimTextColor, selectColor, tabBg, tabSelectedBg));
+
+        // Update queue header colors
+        m_queueHeader->setDynamicColors(m_albumDominantColor.darker(120), textColor, dimTextColor);
+
+        // Update waveform unplayed bar color to match the theme
+        QColor unplayedColor = luminance > 0.5 ? QColor(80, 80, 80) : QColor(200, 200, 200);
+        m_nowPlayingPlayerControls->waveformWidget()->setUnplayedColor(unplayedColor);
+
+        // Update current track highlight and hover colors in queue
+        m_queueWidget->setHighlightColor(m_albumDominantColor.lighter(130));
+        m_queueWidget->setHoverColor(m_albumDominantColor.lighter(150));
+    } else {
+        setStyleSheet(QString());
+        m_queueHeader->resetDefaultColors();
+        m_nowPlayingPlayerControls->waveformWidget()->setUnplayedColor(QColor());
+        m_queueWidget->setHighlightColor(QColor());
+        m_queueWidget->setHoverColor(QColor());
     }
 }
 

@@ -16,6 +16,7 @@ public:
     explicit PlayerControls(QWidget *parent = nullptr);
 
     void setAudioEngine(AudioEngine* engine);
+    WaveformWidget* waveformWidget() const { return m_waveformWidget; }
 
 signals:
     void playClicked();

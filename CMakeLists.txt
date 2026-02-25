@@ -47,11 +47,17 @@ set(SOURCES
     src/deezerauth.cpp
     src/blowfish_jukebox.cpp
     src/audioengine.cpp
+    src/audioengine_stream.cpp
+    src/audioengine_progressive.cpp
+    src/audioengine_queue.cpp
+    src/audioengine_output.cpp
+    src/audioengine_visualization.cpp
     src/streamdownloader.cpp
     src/playlist.cpp
     src/track.cpp
     src/album.cpp
     src/playlistwidget.cpp
+    src/recentwidget.cpp
     src/albumlistwidget.cpp
     src/searchwidget.cpp
     src/playercontrols.cpp
@@ -69,6 +75,7 @@ set(SOURCES
     src/lastfmapi.cpp
     src/scrobblecache.cpp
     src/lastfmsettingsdialog.cpp
+    src/audiosettingsdialog.cpp
 )
 
 set(HEADERS
@@ -82,6 +89,7 @@ set(HEADERS
     src/track.h
     src/album.h
     src/playlistwidget.h
+    src/recentwidget.h
     src/albumlistwidget.h
     src/searchwidget.h
     src/playercontrols.h
@@ -99,6 +107,7 @@ set(HEADERS
     src/lastfmapi.h
     src/scrobblecache.h
     src/lastfmsettingsdialog.h
+    src/audiosettingsdialog.h
 )
 
 # Resources
@@ -148,6 +157,7 @@ if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE
         ${CMAKE_SOURCE_DIR}/external/bass/bass.lib
         ${CMAKE_SOURCE_DIR}/external/bass/bassmix.lib
+        ${CMAKE_SOURCE_DIR}/external/bass/basswasapi.lib
         ${CMAKE_SOURCE_DIR}/external/projectm/libprojectM-4.lib
         ${CMAKE_SOURCE_DIR}/external/projectm/libprojectM_eval.lib
         ${CMAKE_SOURCE_DIR}/external/projectm/hlslparser.lib
@@ -165,6 +175,9 @@ if(WIN32)
         $<TARGET_FILE_DIR:${PROJECT_NAME}>
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/external/bass/bassmix.dll"
+        $<TARGET_FILE_DIR:${PROJECT_NAME}>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/external/bass/basswasapi.dll"
         $<TARGET_FILE_DIR:${PROJECT_NAME}>
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/external/projectm/glew32.dll"

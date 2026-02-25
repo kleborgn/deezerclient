@@ -21,7 +21,7 @@ void QueueHeaderWidget::setupUI()
 
     // Small artwork thumbnail
     m_artLabel = new QLabel(this);
-    m_artLabel->setFixedSize(60, 60);
+    m_artLabel->setFixedSize(90, 90);
     m_artLabel->setStyleSheet("border: 1px solid #444; background: #222; border-radius: 4px;");
     m_artLabel->setScaledContents(true);
     m_artLabel->setAlignment(Qt::AlignCenter);
@@ -33,49 +33,53 @@ void QueueHeaderWidget::setupUI()
 
     // Artist name (bold, larger)
     m_artistLabel = new QLabel(this);
+    m_artistLabel->setObjectName("qhArtist");
     QFont artistFont = m_artistLabel->font();
     artistFont.setPointSize(14);
     artistFont.setBold(true);
     m_artistLabel->setFont(artistFont);
-    m_artistLabel->setStyleSheet("color: white;");
     m_artistLabel->setAutoFillBackground(false);
     textLayout->addWidget(m_artistLabel);
 
     // Album title
     m_titleLabel = new QLabel(this);
+    m_titleLabel->setObjectName("qhTitle");
     QFont titleFont = m_titleLabel->font();
     titleFont.setPointSize(12);
     m_titleLabel->setFont(titleFont);
-    m_titleLabel->setStyleSheet("color: #ccc;");
-    m_titleLabel->setWordWrap(true);
     m_titleLabel->setAutoFillBackground(false);
     textLayout->addWidget(m_titleLabel);
 
     // Stream info (format, bitrate, sample rate)
     m_streamInfoLabel = new QLabel(this);
-    m_streamInfoLabel->setStyleSheet("color: #888;");
+    m_streamInfoLabel->setObjectName("qhDim");
     m_streamInfoLabel->setAutoFillBackground(false);
     m_streamInfoLabel->hide();
     textLayout->addWidget(m_streamInfoLabel);
 
     // Stats (track count, duration)
     m_statsLabel = new QLabel(this);
-    m_statsLabel->setStyleSheet("color: #888;");
+    m_statsLabel->setObjectName("qhDim2");
     m_statsLabel->setAutoFillBackground(false);
     textLayout->addWidget(m_statsLabel);
 
     // Scrobble count
     m_scrobbleLabel = new QLabel(this);
-    m_scrobbleLabel->setStyleSheet("color: #888;");
+    m_scrobbleLabel->setObjectName("qhDim3");
     m_scrobbleLabel->setAutoFillBackground(false);
     m_scrobbleLabel->hide();
     textLayout->addWidget(m_scrobbleLabel);
 
     textLayout->addStretch();
-    layout->addLayout(textLayout);
-    layout->addStretch();
+    layout->addLayout(textLayout, 1);
 
-    setStyleSheet("QueueHeaderWidget { background: #1a1a1a; border-bottom: 1px solid #333; } QLabel { background: transparent; }");
+    setStyleSheet(
+        "QueueHeaderWidget { background: #1a1a1a; border-bottom: 1px solid #333; }"
+        "QLabel { background: transparent; }"
+        "#qhArtist { color: white; }"
+        "#qhTitle { color: #ccc; }"
+        "#qhDim, #qhDim2, #qhDim3 { color: #888; }"
+    );
 }
 
 void QueueHeaderWidget::setAlbum(std::shared_ptr<Album> album)
@@ -174,6 +178,28 @@ void QueueHeaderWidget::loadImage(const QString& url)
         }
         reply->deleteLater();
     });
+}
+
+void QueueHeaderWidget::setDynamicColors(const QColor& bgColor, const QString& textColor, const QString& dimColor)
+{
+    setStyleSheet(QString(
+        "QueueHeaderWidget { background: %1; border-bottom: 1px solid %2; }"
+        "QLabel { background: transparent; }"
+        "#qhArtist { color: %3; }"
+        "#qhTitle { color: %4; }"
+        "#qhDim, #qhDim2, #qhDim3 { color: %4; }"
+    ).arg(bgColor.name(), bgColor.lighter(130).name(), textColor, dimColor));
+}
+
+void QueueHeaderWidget::resetDefaultColors()
+{
+    setStyleSheet(
+        "QueueHeaderWidget { background: #1a1a1a; border-bottom: 1px solid #333; }"
+        "QLabel { background: transparent; }"
+        "#qhArtist { color: white; }"
+        "#qhTitle { color: #ccc; }"
+        "#qhDim, #qhDim2, #qhDim3 { color: #888; }"
+    );
 }
 
 void QueueHeaderWidget::setAlbumScrobbleCount(int count)

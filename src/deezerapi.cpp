@@ -292,6 +292,80 @@ void DeezerAPI::getUserAlbums()
     callGatewayMethod("album.getFavorites", params);
 }
 
+void DeezerAPI::getRecentlyPlayed()
+{
+    if (!m_auth->isAuthenticated() || m_auth->userId().isEmpty()) {
+        emit error("Not authenticated");
+        return;
+    }
+    QJsonObject params;
+    params["user_id"] = m_auth->userId();
+    params["array_default"] = QJsonArray::fromStringList({"USER", "RECENTLY_PLAYED_V2"});
+    callGatewayMethod("mobile.pageUser", params);
+}
+
+void DeezerAPI::getUserRadio()
+{
+    if (!m_auth->isAuthenticated() || m_auth->userId().isEmpty()) {
+        emit error("Not authenticated");
+        return;
+    }
+    QJsonObject params;
+    params["user_id"] = m_auth->userId();
+    emit debugLog("[DeezerAPI] Requesting user radio (Flow)");
+    callGatewayMethod("radio.getUserRadio", params);
+}
+
+void DeezerAPI::getHomeMixes()
+{
+    QJsonObject support;
+    QJsonArray hlTypes;
+    hlTypes.append(QString("track"));
+    hlTypes.append(QString("song"));
+    support["horizontal-list"] = hlTypes;
+
+    QJsonObject gatewayInput;
+    gatewayInput["PAGE"] = QString("home");
+    gatewayInput["VERSION"] = QString("2.5");
+    gatewayInput["SUPPORT"] = support;
+    gatewayInput["LANG"] = QString("en");
+
+    QString gatewayInputStr = QString::fromUtf8(QJsonDocument(gatewayInput).toJson(QJsonDocument::Compact));
+
+    QUrl url(WEB_GATEWAY_URL);
+    QUrlQuery query;
+    query.addQueryItem("api_version", "1.0");
+    query.addQueryItem("api_token", m_auth->checkForm().isEmpty() ? "null" : m_auth->checkForm());
+    query.addQueryItem("input", "3");
+    query.addQueryItem("cid", QString::number(QRandomGenerator::global()->generate()));
+    query.addQueryItem("method", "page.get");
+    query.addQueryItem("gateway_input", gatewayInputStr);
+    url.setQuery(query);
+
+    QNetworkRequest request(url);
+    request.setRawHeader("User-Agent", USER_AGENT);
+    request.setRawHeader("X-Requested-With", "XMLHttpRequest");
+
+    QString cookies = m_auth->buildCookieString();
+    if (!cookies.isEmpty())
+        request.setRawHeader("Cookie", cookies.toUtf8());
+
+    QNetworkReply* reply = m_networkManager->get(request);
+    m_pendingRequests[reply] = "page.get";
+
+    emit debugLog("[DeezerAPI] Requesting home page mixes (Web Gateway GET)");
+}
+
+void DeezerAPI::getTrackMix(const QString& trackId)
+{
+    QJsonObject params;
+    params["sng_id"] = trackId.toLongLong();
+    params["start_with_input_track"] = true;
+
+    emit debugLog(QString("[DeezerAPI] Requesting track mix for track %1").arg(trackId));
+    callGatewayMethod("song.getSearchTrackMix", params);
+}
+
 void DeezerAPI::reportListen(const QString& trackId, int duration, const QString& format,
                             const QString& contextType, const QString& contextId)
 {
@@ -502,7 +576,6 @@ void DeezerAPI::getStreamUrl(const QString& trackId, const QString& trackToken, 
     QByteArray postData = QJsonDocument(body).toJson(QJsonDocument::Compact);
     QNetworkReply* reply = m_networkManager->post(request, postData);
     m_pendingRequests[reply] = "get_url:" + trackId;
-    emit debugLog(QString("getStreamUrl: POST %1/v1/get_url for track %2 (formats: %3)").arg(mediaUrl, trackId, formatsToRequest.join(',')));
 }
 
 void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
@@ -649,14 +722,6 @@ void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
                       .arg(lyrics.length())
                       .arg(syncedLyrics.size()));
 
-        // Debug: Log first synced lyric line structure if available
-        if (!syncedLyrics.isEmpty() && syncedLyrics.first().isObject()) {
-            QJsonObject firstLine = syncedLyrics.first().toObject();
-            QStringList keys = firstLine.keys();
-            emit debugLog(QString("[song.getLyrics] First line fields: %1").arg(keys.join(", ")));
-            emit debugLog(QString("[song.getLyrics] First line values: %1")
-                         .arg(QJsonDocument(firstLine).toJson(QJsonDocument::Compact)));
-        }
 
         emit lyricsReceived(trackId, lyrics, syncedLyrics);
         return;
@@ -690,6 +755,78 @@ void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
             emit debugLog(QString("[deezer.pageProfile] Parsed %1 playlists").arg(playlists.size()));
             emit playlistsFound(playlists);
         }
+        return;
+    }
+
+    if (method == "mobile.pageUser") {
+        QJsonObject results = resultsVal.toObject();
+        //emit debugLog(QString("[mobile.pageUser] Response keys: %1").arg(QStringList(results.keys()).join(", ")));
+        QJsonArray recentItems;
+        if (results.contains("RECENTLY_PLAYED_V2")) {
+            QJsonValue rpVal = results["RECENTLY_PLAYED_V2"];
+            if (rpVal.isArray())
+                recentItems = rpVal.toArray();
+            else if (rpVal.isObject())
+                recentItems = rpVal.toObject()["data"].toArray();
+            //emit debugLog(QString("[mobile.pageUser] RECENTLY_PLAYED_V2 type: %1").arg(rpVal.isArray() ? "array" : rpVal.isObject() ? "object" : "other"));
+        }
+        emit debugLog(QString("[mobile.pageUser] Got %1 recently played items").arg(recentItems.size()));
+        emit recentlyPlayedReceived(recentItems);
+        return;
+    }
+
+    if (method == "radio.getUserRadio") {
+        QJsonArray data;
+        if (resultsVal.isArray())
+            data = resultsVal.toArray();
+        else if (resultsVal.isObject())
+            data = resultsVal.toObject()["data"].toArray();
+        QList<std::shared_ptr<Track>> tracks;
+        for (const QJsonValue& v : data)
+            tracks.append(parseTrack(v.toObject()));
+        emit debugLog(QString("[radio.getUserRadio] Got %1 tracks").arg(tracks.size()));
+        emit userRadioReceived(tracks);
+        return;
+    }
+
+    if (method == "page.get") {
+        QJsonObject results = resultsVal.toObject();
+        QJsonArray sections = results["sections"].toArray();
+        QList<std::shared_ptr<Track>> mixTracks;
+        for (const QJsonValue& sectionVal : sections) {
+            QJsonObject section = sectionVal.toObject();
+            if (section["title"].toString().contains("Mixes inspired by", Qt::CaseInsensitive)) {
+                QJsonArray items = section["items"].toArray();
+                emit debugLog(QString("[page.get] Found 'Mixes inspired by...' section with %1 items").arg(items.size()));
+                int count = 0;
+                for (const QJsonValue& itemVal : items) {
+                    if (count >= 12) break;
+                    QJsonObject item = itemVal.toObject();
+                    QJsonObject trackData = item["data"].toObject();
+                    if (!trackData.isEmpty()) {
+                        mixTracks.append(parseTrack(trackData));
+                        ++count;
+                    }
+                }
+                break;
+            }
+        }
+        emit debugLog(QString("[page.get] Got %1 mix seed tracks").arg(mixTracks.size()));
+        emit homeMixesReceived(mixTracks);
+        return;
+    }
+
+    if (method == "song.getSearchTrackMix") {
+        QJsonArray data;
+        if (resultsVal.isArray())
+            data = resultsVal.toArray();
+        else if (resultsVal.isObject())
+            data = resultsVal.toObject()["data"].toArray();
+        QList<std::shared_ptr<Track>> tracks;
+        for (const QJsonValue& v : data)
+            tracks.append(parseTrack(v.toObject()));
+        emit debugLog(QString("[song.getSearchTrackMix] Got %1 tracks").arg(tracks.size()));
+        emit trackMixReceived(tracks);
         return;
     }
 
@@ -832,7 +969,7 @@ void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
         }
         
         // Debug: Show what keys are in the results
-        emit debugLog(QString("[search_music] Results keys: %1").arg(results.keys().join(", ")));
+        //emit debugLog(QString("[search_music] Results keys: %1").arg(results.keys().join(", ")));
 
         if (results.contains("ALBUM")) {
             data = results["ALBUM"].toObject()["data"].toArray();
@@ -926,7 +1063,7 @@ void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
                     msg += QString("\n  %1: %2").arg(err["code"].toInt()).arg(err["message"].toString());
                 }
             }
-            emit debugLog(QString("[get_url] %1. Body: %2").arg(msg, rawResponse.left(500)));
+            //emit debugLog(QString("[get_url] %1. Body: %2").arg(msg, rawResponse.left(500)));
             emit error(msg);
             return;
         }
@@ -949,18 +1086,20 @@ void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
             QString fmt = o["format"].toString();
             if (!fmt.isEmpty()) returnedFormats.append(fmt);
         }
-        emit debugLog(QString("[get_url] Response media count: %1, formats: %2").arg(mediaArr.size()).arg(returnedFormats.join(',')));
+        //emit debugLog(QString("[get_url] Response media count: %1, formats: %2").arg(mediaArr.size()).arg(returnedFormats.join(',')));
+
+        //emit debugLog(QString("[get_url] Full response: %1").arg(rawResponse.left(2000)));
 
         QJsonObject bestMedia;
         QString bestFormat;
-        int bestOrder = STREAM_FORMAT_PREFERENCE.size();
+        int bestOrder = STREAM_FORMAT_PREFERENCE.size() + 1;
         for (const QJsonValue& m : mediaArr) {
             QJsonObject media = m.toObject();
             QJsonArray sources = media["sources"].toArray();
             if (sources.isEmpty()) continue;
             QString fmt = media["format"].toString();
             int order = STREAM_FORMAT_PREFERENCE.indexOf(fmt);
-            if (order < 0) order = STREAM_FORMAT_PREFERENCE.size();
+            if (order < 0) order = STREAM_FORMAT_PREFERENCE.size(); // unknown formats rank after known ones
             if (order < bestOrder) {
                 bestOrder = order;
                 bestMedia = media;
@@ -968,6 +1107,7 @@ void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
             }
         }
         if (bestMedia.isEmpty()) {
+            emit debugLog(QString("[get_url] No sources found. Raw: %1").arg(rawResponse.left(2000)));
             emit error("Media API: no sources (stream URL) in response");
             return;
         }
@@ -1005,6 +1145,20 @@ std::shared_ptr<Track> DeezerAPI::parseTrack(const QJsonObject& trackJson)
         track->setArtist(trackJson["ART_NAME"].toString());
     else if (trackJson.contains("artist"))
         track->setArtist(trackJson["artist"].toObject()["name"].toString());
+
+    // Parse featured artists from ARTISTS array (skip main artist)
+    if (trackJson.contains("ARTISTS")) {
+        QJsonArray artistsArr = trackJson["ARTISTS"].toArray();
+        QStringList featured;
+        for (const QJsonValue& val : artistsArr) {
+            QJsonObject artistObj = val.toObject();
+            QString name = artistObj["ART_NAME"].toString();
+            if (!name.isEmpty() && name != track->artist())
+                featured.append(name);
+        }
+        track->setFeaturedArtists(featured);
+    }
+
     QString albumTitle = trackJson.contains("ALB_TITLE") ? trackJson["ALB_TITLE"].toString() : QString();
     if (trackJson.contains("album") && !trackJson["album"].isString())
         albumTitle = trackJson["album"].toObject()["title"].toString();
@@ -1076,8 +1230,20 @@ std::shared_ptr<Track> DeezerAPI::parseTrack(const QJsonObject& trackJson)
     QString albumArtUrl = imageUrlForObject("cover", picId, 1000, 1000);
     track->setAlbumArt(albumArtUrl);
 
+    // User-uploaded tracks have negative SNG_ID and TOKEN instead of TRACK_TOKEN
+    bool isUserUploaded = false;
+    {
+        bool ok;
+        qint64 numericId = trackId.toLongLong(&ok);
+        if (ok && numericId < 0)
+            isUserUploaded = true;
+    }
+    track->setUserUploaded(isUserUploaded);
+
     if (trackJson.contains("TRACK_TOKEN"))
         track->setTrackToken(trackJson["TRACK_TOKEN"].toString());
+    else if (trackJson.contains("TOKEN"))
+        track->setTrackToken(trackJson["TOKEN"].toString());
     track->setPreviewUrl(QString("https://cdns-preview-e.dzcdn.net/stream/c-%1-1.mp3").arg(trackId));
 
     // Favorite status - check against fetched favorites set
@@ -1196,14 +1362,13 @@ QString DeezerAPI::md5Hex(const QString& input)
 // - Key: MD5(Buffer.from(String(trackId), 'binary')) as hex, then bfKey[i] = idMd5[i]^idMd5[i+16]^SECRET[i].
 // - Chunks of 2048 bytes; decrypt when (block % 3 == 0) per decrypter.js line 49.
 // - Blowfish CBC from jukebox (same key expansion, same IV [0,1,2,3,4,5,6,7] per chunk).
-bool DeezerAPI::decryptStreamBuffer(QByteArray& data, const QString& trackId) const
+QByteArray DeezerAPI::computeTrackKey(const QString& trackId)
 {
     QByteArray keyBytes = s_trackXorKey.toLatin1();
-    if (keyBytes.size() < 16 || data.isEmpty()) return false;
-    // Buffer.from(String(trackId), 'binary') => trackId as Latin1 bytes
+    if (keyBytes.size() < 16) return QByteArray();
     QByteArray idBytes = trackId.toLatin1();
     QString songIdHash = QString::fromLatin1(QCryptographicHash::hash(idBytes, QCryptographicHash::Md5).toHex());
-    if (songIdHash.size() < 32) return false;
+    if (songIdHash.size() < 32) return QByteArray();
     QByteArray trackKey(16, 0);
     for (int i = 0; i < 16; i++) {
         quint8 c = static_cast<quint8>(songIdHash[i].unicode());
@@ -1211,6 +1376,13 @@ bool DeezerAPI::decryptStreamBuffer(QByteArray& data, const QString& trackId) co
         c ^= static_cast<quint8>(keyBytes[i]);
         trackKey[i] = c;
     }
+    return trackKey;
+}
+
+bool DeezerAPI::decryptStreamBuffer(QByteArray& data, const QString& trackId) const
+{
+    QByteArray trackKey = computeTrackKey(trackId);
+    if (trackKey.isEmpty() || data.isEmpty()) return false;
     static const quint8 IV[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
     const int BLOCK_SIZE = 2048;
     int chunkIndex = 0;

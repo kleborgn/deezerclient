@@ -9,8 +9,10 @@ class QNetworkAccessManager;
 class QNetworkReply;
 
 /**
- * Runs in a worker thread. Performs HTTPS GET and emits downloadReady(data, errorMsg)
+ * Runs in a worker thread. Performs HTTPS GET with progressive (chunked) delivery
  * so the main thread is never blocked by DNS/SSL/socket.
+ *
+ * Emits chunkReady() per readyRead, then progressiveDownloadFinished().
  */
 class StreamDownloader : public QObject
 {
@@ -21,13 +23,15 @@ public:
     ~StreamDownloader();
 
 public slots:
-    void startDownload(const QString& url, const QString& trackId);
+    void startProgressiveDownload(const QString& url, const QString& trackId);
 
 signals:
-    void downloadReady(const QByteArray& data, const QString& errorMessage, const QString& trackId);
+    void chunkReady(const QByteArray& chunk, const QString& trackId);
+    void progressiveDownloadFinished(const QString& errorMessage, const QString& trackId);
 
 private slots:
-    void onReplyFinished();
+    void onReadyRead();
+    void onProgressiveReplyFinished();
 
 private:
     QNetworkAccessManager* m_nam;

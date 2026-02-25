@@ -20,6 +20,8 @@ public:
     void setPlaylist(std::shared_ptr<Playlist> playlist);
     void setAlbumScrobbleCount(int count);
     void setStreamInfo(const QString& info);
+    void setDynamicColors(const QColor& bgColor, const QString& textColor, const QString& dimColor);
+    void resetDefaultColors();
     void clear();
 
 private:
