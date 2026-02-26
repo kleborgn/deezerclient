@@ -2,6 +2,8 @@
 
 A native Windows desktop client for Deezer built with C++ and Qt, featuring gapless playback via the BASS audio library.
 
+![Screenshot](DeezerClient_YZsCv1PYUr.png)
+
 ## Features
 
 - **Gapless Playback** — Seamless track transitions using BassMix queue mode with preloading
