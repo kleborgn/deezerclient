@@ -171,6 +171,7 @@ private:
     void setupStreamSyncs(HSTREAM stream, HSYNC* endSyncPtr, HSYNC* nearEndSyncPtr);
     void destroyStream();
     void startWaveformComputation();
+    void invalidateAndRetryPreload();  // Clear preload and retry when queue order changes
 
     // Output mode helpers (abstract DirectSound vs WASAPI)
     bool startMixerOutput();   // BASS_ChannelPlay or BASS_WASAPI_Start

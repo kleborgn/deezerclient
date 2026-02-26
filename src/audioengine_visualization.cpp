@@ -19,10 +19,13 @@ QVector<float> computeWaveformFromBuffer(const QByteArray& data, int numPeaks,
                                                QRecursiveMutex* bassMutex,
                                                double completionRatio = 1.0)
 {
-    QVector<float> peaks;
     if (data.isEmpty() || numPeaks <= 0)
-        return peaks;
+        return {};
 
+    // The decode stream is private to this function, so mutex is only needed for
+    // creation and destruction (BASS global state), not for reads.
+    // Note: avoid BASS_SAMPLE_MONO — it causes BASS_ChannelGetLength to report
+    // incorrect byte counts for some formats (FLAC), producing half-length waveforms.
     HSTREAM decode = 0;
     {
         QMutexLocker locker(bassMutex);
@@ -35,60 +38,65 @@ QVector<float> computeWaveformFromBuffer(const QByteArray& data, int numPeaks,
         );
     }
     if (!decode)
-        return peaks;
+        return {};
 
     QWORD totalBytes = BASS_ChannelGetLength(decode, BASS_POS_BYTE);
     if (totalBytes == 0 || totalBytes == static_cast<QWORD>(-1)) {
         QMutexLocker locker(bassMutex);
         BASS_StreamFree(decode);
-        return peaks;
+        return {};
     }
 
-    // For partial waveform (progressive download), only fill the first portion of peaks
-    int filledCount = (completionRatio >= 1.0)
-        ? numPeaks
-        : qBound(1, static_cast<int>(numPeaks * completionRatio), numPeaks);
+    // Estimate the full decoded length so each peak always maps to the same
+    // absolute song position.  During progressive download totalBytes only
+    // covers the data received so far; dividing by completionRatio gives the
+    // expected full length.  This keeps existing peaks stable as new data
+    // arrives — new peaks simply fill in from the right.
+    QWORD estimatedFullBytes = (completionRatio > 0.01)
+        ? static_cast<QWORD>(totalBytes / completionRatio)
+        : totalBytes;
 
-    peaks.resize(numPeaks);
-    peaks.fill(0.0f);
-    const QWORD bytesPerPeak = totalBytes / qMax(1, filledCount);
+    QVector<float> peaks(numPeaks, 0.0f);
+    QVector<int>   counts(numPeaks, 0);
+    const double bytesPerPeak = static_cast<double>(estimatedFullBytes) / numPeaks;
 
-    static constexpr int BUF_SAMPLES = 8192;
+    // Single sequential decode pass — no seeking.  BASS_ChannelSetPosition on
+    // in-memory decode streams re-decodes from the start to each target, so
+    // 500 seeks ≈ 250 full decodes.  A single forward pass is much faster.
+    // We read large chunks and accumulate the average absolute value per bucket.
+    static constexpr int BUF_SAMPLES = 16384;
     float buffer[BUF_SAMPLES];
+    QWORD decodedBytes = 0;
+    int readCount = 0;
 
-    for (int i = 0; i < filledCount; ++i) {
-        float sum = 0.0f;
-        int count = 0;
-        QWORD remainingSegmentBytes = bytesPerPeak;
-
-        while (remainingSegmentBytes > 0) {
-            // Early abort check: if generation changed, user skipped to a new track
-            if (generationPtr && generationPtr->load() != currentGeneration) {
-                QMutexLocker locker(bassMutex);
-                BASS_StreamFree(decode);
-                return QVector<float>();
-            }
-
-            DWORD toRead = static_cast<DWORD>(
-                qMin(static_cast<QWORD>(BUF_SAMPLES * sizeof(float)), remainingSegmentBytes));
-
-            DWORD bytesRead = 0;
-            {
-                QMutexLocker locker(bassMutex);
-                bytesRead = BASS_ChannelGetData(decode, buffer, toRead);
-            }
-
-            if (bytesRead == static_cast<DWORD>(-1) || bytesRead == 0)
-                break; // error, end-of-stream, or no data
-
-            int samples = static_cast<int>(bytesRead / sizeof(float));
-            for (int s = 0; s < samples; ++s) {
-                sum += qAbs(buffer[s]);
-            }
-            count += samples;
-            remainingSegmentBytes -= bytesRead;
+    while (true) {
+        // Abort check every ~50 reads (~3.2 MB of mono float)
+        if ((++readCount % 50 == 0) && generationPtr && generationPtr->load() != currentGeneration) {
+            QMutexLocker locker(bassMutex);
+            BASS_StreamFree(decode);
+            return {};
         }
-        peaks[i] = (count > 0) ? (sum / count) : 0.0f;
+
+        DWORD bytesRead = BASS_ChannelGetData(decode, buffer,
+                                               BUF_SAMPLES * sizeof(float));
+        if (bytesRead == static_cast<DWORD>(-1) || bytesRead == 0)
+            break;
+
+        int samples = static_cast<int>(bytesRead / sizeof(float));
+        for (int s = 0; s < samples; ++s) {
+            int peakIdx = static_cast<int>((decodedBytes + s * sizeof(float)) / bytesPerPeak);
+            if (peakIdx >= numPeaks) goto done;
+            peaks[peakIdx] += qAbs(buffer[s]);
+            counts[peakIdx]++;
+        }
+        decodedBytes += bytesRead;
+    }
+    done:
+
+    // Convert sums to averages
+    for (int i = 0; i < numPeaks; ++i) {
+        if (counts[i] > 0)
+            peaks[i] /= counts[i];
     }
 
     {
@@ -96,17 +104,11 @@ QVector<float> computeWaveformFromBuffer(const QByteArray& data, int numPeaks,
         BASS_StreamFree(decode);
     }
 
-    // Normalise peaks to 0.0 - 1.0
-    float maxPeak = 0.0f;
-    for (float p : peaks)
-        if (p > maxPeak) maxPeak = p;
-
+    // Normalise peaks to 0.0 - 1.0 and apply power curve for visual dynamic range
+    float maxPeak = *std::max_element(peaks.begin(), peaks.end());
     if (maxPeak > 0.0f) {
         for (float& p : peaks) {
             p /= maxPeak;
-            // Apply a power transform to increase visual dynamic range.
-            // pow(p, 1.5) makes quiet parts smaller and loud parts stand out,
-            // avoiding the "blocky" look on compressed modern tracks.
             p = std::pow(p, 1.5f);
         }
     }

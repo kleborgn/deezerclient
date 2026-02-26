@@ -324,6 +324,7 @@ void AudioEngine::onProgressiveDownloadFinished(const QString& errorMessage, con
             BASS_ChannelFlags(m_mixerStream, BASS_MIXER_QUEUE, BASS_MIXER_QUEUE);
             setupStreamSyncs(m_currentStream, &m_currentEndSync, &m_currentNearEndSync);
             updateStreamInfo(m_currentStream);
+            m_waveformGeneration.fetch_add(1);
             startWaveformComputation();
         }
         emit debugLog(QString("[AudioEngine] Partial download: continuing playback with %1 bytes").arg(m_streamBuffer.size()));
@@ -355,8 +356,11 @@ void AudioEngine::onProgressiveDownloadFinished(const QString& errorMessage, con
         setupStreamSyncs(m_currentStream, &m_currentEndSync, &m_currentNearEndSync);
         updateStreamInfo(m_currentStream);
 
-        // Recompute waveform with ratio 1.0 (full file) to fill any gaps
-        // from the estimated ratios used during progressive download
+        // Invalidate any in-flight progressive waveform computations, then
+        // recompute with ratio 1.0 (full file). Without this bump, a partial
+        // computation from the last onStreamChunkReady could finish after the
+        // full one and overwrite it with incomplete data.
+        m_waveformGeneration.fetch_add(1);
         startWaveformComputation();
     } else {
         // Small file (< 64KB): never started BUFFERPUSH playback. Use regular memory stream.
@@ -438,10 +442,42 @@ void AudioEngine::onProgressiveDownloadFinished(const QString& errorMessage, con
     }
 
     m_listenReported = false;
+    m_waveformGeneration.fetch_add(1);
     startWaveformComputation();
 }
 
 // ── Preloading ──────────────────────────────────────────────────────────
+
+void AudioEngine::invalidateAndRetryPreload()
+{
+    // Clear existing preload state
+    m_preloadTrack.reset();
+    m_preloadReady = false;
+    m_preloadBuffer.clear();
+    m_preloadFormat.clear();
+
+    // Remove preloaded stream from mixer if it exists
+    QMutexLocker locker(&m_bassMutex);
+    if (m_preloadStream != 0) {
+        BASS_Mixer_ChannelRemove(m_preloadStream);
+        BASS_StreamFree(m_preloadStream);
+        m_preloadStream = 0;
+        emit debugLog("[AudioEngine] Invalidated preloaded stream due to queue change");
+    }
+    locker.unlock();
+
+    // Cancel any in-progress preload download
+    QMetaObject::invokeMethod(m_preloadDownloader, "startProgressiveDownload",
+                              Qt::QueuedConnection,
+                              Q_ARG(QString, QString()),
+                              Q_ARG(QString, QString()));
+
+    // Retry preloading if we're currently playing and gapless is enabled
+    if (m_state == Playing && m_gaplessEnabled) {
+        emit debugLog("[AudioEngine] Retrying preload after queue change");
+        preloadNextTrack();
+    }
+}
 
 void AudioEngine::preloadNextTrack()
 {

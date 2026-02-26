@@ -2,6 +2,35 @@
 #include "streamdownloader.h"
 #include <QMetaObject>
 
+// ── Helper Functions ─────────────────────────────────────────────────────
+
+// Check if the next track position is affected by a queue operation
+static bool isNextTrackAffected(const QList<std::shared_ptr<Track>>& queue,
+                               int currentIndex, int positionOrIndex,
+                               AudioEngine::RepeatMode repeatMode, bool isMoveOp = false)
+{
+    // Calculate next track index
+    int nextIndex = currentIndex + 1;
+    if (repeatMode == AudioEngine::RepeatAll && nextIndex >= queue.size()) {
+        nextIndex = 0;
+    }
+
+    if (isMoveOp) {
+        // For move operations, check if either source or destination affects next track
+        return (positionOrIndex == nextIndex);
+    } else {
+        // For insert operations, check if inserting at or before next track
+        if (positionOrIndex >= 0 && positionOrIndex < queue.size() && positionOrIndex <= nextIndex) {
+            return true;
+        }
+        // Appending to end when nextIndex was at end
+        if ((positionOrIndex < 0 || positionOrIndex >= queue.size()) && nextIndex == queue.size()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ── Queue Management Methods ────────────────────────────────────────────
 
 void AudioEngine::setQueue(const QList<std::shared_ptr<Track>>& tracks)
@@ -202,6 +231,11 @@ void AudioEngine::moveInQueue(int fromIndex, int toIndex)
         fromIndex == toIndex)
         return;
 
+    // Check if next track is affected by this move
+    bool nextTrackAffected = isNextTrackAffected(m_queue, m_currentIndex, fromIndex, m_repeatMode, true) ||
+                             isNextTrackAffected(m_queue, m_currentIndex, toIndex, m_repeatMode, true) ||
+                             (m_preloadTrack && m_queue[fromIndex]->id() == m_preloadTrack->id());
+
     auto track = m_queue[fromIndex];
     m_queue.removeAt(fromIndex);
     m_queue.insert(toIndex, track);
@@ -216,12 +250,21 @@ void AudioEngine::moveInQueue(int fromIndex, int toIndex)
     }
 
     emit queueChanged();
+
+    // If the next track changed and we have a preloaded track, invalidate and retry
+    if (nextTrackAffected && m_preloadTrack) {
+        emit debugLog("[AudioEngine] Next track changed due to move, invalidating preload");
+        invalidateAndRetryPreload();
+    }
 }
 
 void AudioEngine::addToQueue(std::shared_ptr<Track> track, int position)
 {
     if (!track)
         return;
+
+    // Check if the next track position is affected by this insertion
+    bool nextTrackAffected = isNextTrackAffected(m_queue, m_currentIndex, position, m_repeatMode, false);
 
     if (position < 0 || position >= m_queue.size()) {
         m_queue.append(track);
@@ -232,12 +275,21 @@ void AudioEngine::addToQueue(std::shared_ptr<Track> track, int position)
     }
 
     emit queueChanged();
+
+    // If the next track changed and we have a preloaded track, invalidate and retry
+    if (nextTrackAffected && m_preloadTrack) {
+        emit debugLog("[AudioEngine] Next track changed due to add, invalidating preload");
+        invalidateAndRetryPreload();
+    }
 }
 
 void AudioEngine::addToQueue(const QList<std::shared_ptr<Track>>& tracks, int position)
 {
     if (tracks.isEmpty())
         return;
+
+    // Check if the next track position is affected by this insertion
+    bool nextTrackAffected = isNextTrackAffected(m_queue, m_currentIndex, position, m_repeatMode, false);
 
     if (position < 0 || position >= m_queue.size()) {
         // Append all tracks to the end
@@ -252,6 +304,12 @@ void AudioEngine::addToQueue(const QList<std::shared_ptr<Track>>& tracks, int po
     }
 
     emit queueChanged();
+
+    // If the next track changed and we have a preloaded track, invalidate and retry
+    if (nextTrackAffected && m_preloadTrack) {
+        emit debugLog("[AudioEngine] Next track changed due to batch add, invalidating preload");
+        invalidateAndRetryPreload();
+    }
 }
 
 void AudioEngine::clearQueue()
