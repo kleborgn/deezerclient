@@ -165,7 +165,7 @@ void DeezerAuth::callGatewayGet(const QString& method, const QUrlQuery& extraPar
     // For now, we'll use a static member or require it to be set
     QUrl url(GATEWAY_URL);
     QUrlQuery query;
-    query.addQueryItem("api_key", "REDACTED_API_KEY");
+    query.addQueryItem("api_key", DEEZER_MOBILE_API_KEY);
     query.addQueryItem("output", "3");
     query.addQueryItem("method", method);
     for (const auto& item : extraParams.queryItems(QUrl::FullyDecoded))
@@ -466,7 +466,7 @@ void DeezerAuth::handleApiCheckToken(const QJsonValue& resultsVal)
         // Call mobile_userAutoLog through gateway
         QUrl url(GATEWAY_URL);
         QUrlQuery query;
-        query.addQueryItem("api_key", "REDACTED_API_KEY");
+        query.addQueryItem("api_key", DEEZER_MOBILE_API_KEY);
         query.addQueryItem("output", "3");
         query.addQueryItem("input", "3");
         query.addQueryItem("method", "mobile_userAutoLog");
@@ -521,7 +521,7 @@ void DeezerAuth::handleApiCheckToken(const QJsonValue& resultsVal)
 
         QUrl url(GATEWAY_URL);
         QUrlQuery query;
-        query.addQueryItem("api_key", "REDACTED_API_KEY");
+        query.addQueryItem("api_key", DEEZER_MOBILE_API_KEY);
         query.addQueryItem("output", "3");
         query.addQueryItem("input", "3");
         query.addQueryItem("method", "mobile_userAuth");
