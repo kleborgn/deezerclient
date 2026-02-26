@@ -2,6 +2,7 @@
 #include "deezerapi.h"
 #include "blowfish_jukebox.h"
 #include "windowsmediacontrols.h"
+#include "streamdownloader.h"
 #include <QThread>
 #include <QTimer>
 #include <QtConcurrent>
@@ -467,10 +468,9 @@ void AudioEngine::invalidateAndRetryPreload()
     locker.unlock();
 
     // Cancel any in-progress preload download
-    QMetaObject::invokeMethod(m_preloadDownloader, "startProgressiveDownload",
-                              Qt::QueuedConnection,
-                              Q_ARG(QString, QString()),
-                              Q_ARG(QString, QString()));
+    if (m_preloadDownloader) {
+        m_preloadDownloader->startProgressiveDownload(QString(), QString());
+    }
 
     // Retry preloading if we're currently playing and gapless is enabled
     if (m_state == Playing && m_gaplessEnabled) {
