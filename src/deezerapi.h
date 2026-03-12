@@ -132,7 +132,7 @@ private slots:
 private:
     void ensureSid();  // Calls initializeKeys() if no SID (async)
     QNetworkReply* callGatewayMethod(const QString& method, const QJsonObject& params, bool useSid = true);
-    void callWebGatewayMethod(const QString& method, const QJsonObject& params);
+    QNetworkReply* callWebGatewayMethod(const QString& method, const QJsonObject& params);
     QByteArray buildGatewayPostBody(const QJsonObject& params);
 
     std::shared_ptr<Track> parseTrack(const QJsonObject& trackJson);
@@ -158,6 +158,7 @@ private:
 
     QMap<QNetworkReply*, QString> m_pendingRequests;
     QSet<QString> m_favoriteTrackIds;
+    QSet<QString> m_tokenRefreshedIds;  // tracks already retried once, to prevent infinite loop
 };
 
 #endif // DEEZERAPI_H

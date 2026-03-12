@@ -55,6 +55,7 @@ signals:
     void albumInfoReceived(const QString& albumKey, int playcount, int userPlaycount);
     void userInfoReceived(const QString& username, int playcount);
     void error(const QString& errorMessage);
+    void debugLog(const QString& message);
 
 private slots:
     void handleNetworkReply(QNetworkReply* reply);

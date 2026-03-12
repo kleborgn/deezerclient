@@ -125,7 +125,7 @@ QNetworkReply* DeezerAPI::callGatewayMethod(const QString& method, const QJsonOb
     return reply;
 }
 
-void DeezerAPI::callWebGatewayMethod(const QString& method, const QJsonObject& params)
+QNetworkReply* DeezerAPI::callWebGatewayMethod(const QString& method, const QJsonObject& params)
 {
     QUrl url(WEB_GATEWAY_URL);
     QUrlQuery query;
@@ -150,9 +150,8 @@ void DeezerAPI::callWebGatewayMethod(const QString& method, const QJsonObject& p
     QNetworkReply* reply = m_networkManager->post(request, postData);
     m_pendingRequests[reply] = method;
 
-    QString logMsg = QString("[%1] Request sent (Web Gateway POST)")
-        .arg(method);
-    emit debugLog(logMsg);
+    emit debugLog(QString("[%1] Request sent (Web Gateway POST)").arg(method));
+    return reply;
 }
 
 QByteArray DeezerAPI::buildGatewayPostBody(const QJsonObject& params)
@@ -524,7 +523,9 @@ static const QStringList STREAM_FORMAT_PREFERENCE = {
     QStringLiteral("MP3_256"),
     QStringLiteral("MP3_192"),
     QStringLiteral("MP3_128"),
+    QStringLiteral("MP3_64"),
     QStringLiteral("AAC_96"),
+    QStringLiteral("MP3_MISC"),
 };
 
 // Build media/get_url request body exactly like diezel MediaClient.getSongStreams
@@ -553,20 +554,18 @@ void DeezerAPI::getStreamUrl(const QString& trackId, const QString& trackToken, 
     QJsonObject body;
     body["license_token"] = token;
     body["track_tokens"] = QJsonArray::fromStringList({ trackToken });
-    QJsonArray mediaArr;
     QStringList formatsToRequest = format.isEmpty() ? STREAM_FORMAT_PREFERENCE : QStringList{ format };
+    QJsonArray formatsJson;
     for (const QString& f : formatsToRequest) {
-        QJsonArray formatsJson;
         QJsonObject formatItem;
         formatItem["cipher"] = "BF_CBC_STRIPE";
         formatItem["format"] = f;
         formatsJson.append(formatItem);
-        QJsonObject mediaItem;
-        mediaItem["type"] = "FULL";
-        mediaItem["formats"] = formatsJson;
-        mediaArr.append(mediaItem);
     }
-    body["media"] = mediaArr;
+    QJsonObject mediaItem;
+    mediaItem["type"] = "FULL";
+    mediaItem["formats"] = formatsJson;
+    body["media"] = QJsonArray{ mediaItem };
 
     QUrl url(mediaUrl + "/v1/get_url");
     QNetworkRequest request(url);
@@ -574,6 +573,7 @@ void DeezerAPI::getStreamUrl(const QString& trackId, const QString& trackToken, 
     request.setRawHeader("User-Agent", USER_AGENT);
 
     QByteArray postData = QJsonDocument(body).toJson(QJsonDocument::Compact);
+    emit debugLog(QString("[get_url] Payload: %1").arg(QString::fromUtf8(postData)));
     QNetworkReply* reply = m_networkManager->post(request, postData);
     m_pendingRequests[reply] = "get_url:" + trackId;
 }
@@ -689,6 +689,24 @@ void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
     if (method == "song_getData") {
         QJsonObject results = resultsVal.isObject() ? resultsVal.toObject() : QJsonObject();
         emit trackReceived(parseTrack(results));
+        return;
+    }
+
+    if (method.startsWith("song_getData_refresh:")) {
+        QString trackId = method.mid(21); // after "song_getData_refresh:"
+        // song.getListData returns { data: [ { TRACK_TOKEN, ... } ] }
+        QJsonArray dataArr = resultsVal.isObject()
+            ? resultsVal.toObject()["data"].toArray()
+            : QJsonArray();
+        QString freshToken = dataArr.isEmpty()
+            ? QString()
+            : dataArr[0].toObject()["TRACK_TOKEN"].toString();
+        if (freshToken.isEmpty()) {
+            emit error(QString("Failed to refresh track token for %1").arg(trackId));
+            return;
+        }
+        emit debugLog(QString("[get_url] Got fresh token for track %1, retrying stream URL").arg(trackId));
+        getStreamUrl(trackId, freshToken);
         return;
     }
 
@@ -1074,7 +1092,28 @@ void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
             emit error("Media API returned no data");
             return;
         }
+        emit debugLog(QString("[get_url] Full response: %1").arg(rawResponse.left(2000)));
         QJsonObject first = dataArr[0].toObject();
+        if (first.contains("errors") && first["errors"].isArray()) {
+            QJsonArray errs = first["errors"].toArray();
+            int code = errs.isEmpty() ? -1 : errs[0].toObject()["code"].toInt();
+            if (code == 2002 && !m_tokenRefreshedIds.contains(trackId)) {
+                // Track token expired — re-fetch via web gateway (same as browser) and retry once
+                m_tokenRefreshedIds.insert(trackId);
+                emit debugLog(QString("[get_url] Token expired (2002) for track %1, refreshing via web gateway...").arg(trackId));
+                QJsonObject params;
+                params["SNG_IDS"] = QJsonArray{ trackId.toLongLong() };
+                QNetworkReply* refreshReply = callWebGatewayMethod("song.getListData", params);
+                if (refreshReply)
+                    m_pendingRequests[refreshReply] = "song_getData_refresh:" + trackId;
+                return;
+            }
+            QString msg = errs.isEmpty()
+                ? "Media API track error"
+                : QString("Media API error %1: %2").arg(code).arg(errs[0].toObject()["message"].toString());
+            emit error(msg);
+            return;
+        }
         QJsonArray mediaArr = first["media"].toArray();
         if (mediaArr.isEmpty()) {
             emit error("Media API: no media in response");
@@ -1086,9 +1125,7 @@ void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
             QString fmt = o["format"].toString();
             if (!fmt.isEmpty()) returnedFormats.append(fmt);
         }
-        //emit debugLog(QString("[get_url] Response media count: %1, formats: %2").arg(mediaArr.size()).arg(returnedFormats.join(',')));
-
-        //emit debugLog(QString("[get_url] Full response: %1").arg(rawResponse.left(2000)));
+        emit debugLog(QString("[get_url] Response media count: %1, formats: %2").arg(mediaArr.size()).arg(returnedFormats.join(',')));
 
         QJsonObject bestMedia;
         QString bestFormat;
@@ -1114,6 +1151,7 @@ void DeezerAPI::handleNetworkReply(QNetworkReply* reply)
         QString url = bestMedia["sources"].toArray()[0].toObject()["url"].toString();
         if (bestFormat.isEmpty())
             bestFormat = QStringLiteral("MP3_128");
+        m_tokenRefreshedIds.remove(trackId);
         emit debugLog(QString("[get_url] Picked format: %1").arg(bestFormat));
         emit streamUrlReceived(trackId, url, bestFormat);
         return;
@@ -1137,7 +1175,25 @@ std::shared_ptr<Track> DeezerAPI::parseTrack(const QJsonObject& trackJson)
         QString::number(trackJson["SNG_ID"].toVariant().toLongLong()) :
         QString::number(trackJson["id"].toInt());
     QString title = trackJson.contains("SNG_TITLE") ? trackJson["SNG_TITLE"].toString() : trackJson["title"].toString();
-    track->setId(trackId);
+
+    // If the track has a FALLBACK, use its SNG_ID and TRACK_TOKEN for streaming
+    // (the main entry may be region-locked while the fallback has rights)
+    QJsonObject streamSource = trackJson;
+    if (trackJson.contains("FALLBACK") && trackJson["FALLBACK"].isObject()) {
+        QJsonObject fallback = trackJson["FALLBACK"].toObject();
+        if (fallback.contains("SNG_ID") && fallback.contains("TRACK_TOKEN")) {
+            emit debugLog(QString("[parseTrack] '%1' has FALLBACK: using SNG_ID %2 instead of %3")
+                .arg(title,
+                     QString::number(fallback["SNG_ID"].toVariant().toLongLong()),
+                     trackId));
+            streamSource = fallback;
+        }
+    }
+    QString streamId = streamSource.contains("SNG_ID") ?
+        QString::number(streamSource["SNG_ID"].toVariant().toLongLong()) : trackId;
+
+    track->setId(trackId);       // keep original ID for display/queue purposes
+    track->setStreamId(streamId); // use fallback ID for actual streaming
     track->setTitle(title);
     int duration = trackJson.contains("DURATION") ? trackJson["DURATION"].toVariant().toInt() : trackJson["duration"].toVariant().toInt();
     track->setDuration(duration);
@@ -1162,10 +1218,16 @@ std::shared_ptr<Track> DeezerAPI::parseTrack(const QJsonObject& trackJson)
     QString albumTitle = trackJson.contains("ALB_TITLE") ? trackJson["ALB_TITLE"].toString() : QString();
     if (trackJson.contains("album") && !trackJson["album"].isString())
         albumTitle = trackJson["album"].toObject()["title"].toString();
+    if (albumTitle.isEmpty() && streamSource != trackJson)
+        albumTitle = streamSource["ALB_TITLE"].toString();
     track->setAlbum(albumTitle);
 
-    // Extract album picture ID - try multiple sources
-    QString picId = trackJson.contains("ALB_PICTURE") ? trackJson["ALB_PICTURE"].toString() : QString();
+    // Extract album picture ID - prefer fallback's art when present (original may have a placeholder)
+    QString picId;
+    if (streamSource != trackJson && streamSource.contains("ALB_PICTURE"))
+        picId = streamSource["ALB_PICTURE"].toString();
+    if (picId.isEmpty())
+        picId = trackJson["ALB_PICTURE"].toString();
 
     // Try album object if ALB_PICTURE is missing
     if (picId.isEmpty() && trackJson.contains("album") && trackJson["album"].isObject()) {
@@ -1240,7 +1302,9 @@ std::shared_ptr<Track> DeezerAPI::parseTrack(const QJsonObject& trackJson)
     }
     track->setUserUploaded(isUserUploaded);
 
-    if (trackJson.contains("TRACK_TOKEN"))
+    if (streamSource.contains("TRACK_TOKEN"))
+        track->setTrackToken(streamSource["TRACK_TOKEN"].toString());
+    else if (trackJson.contains("TRACK_TOKEN"))
         track->setTrackToken(trackJson["TRACK_TOKEN"].toString());
     else if (trackJson.contains("TOKEN"))
         track->setTrackToken(trackJson["TOKEN"].toString());

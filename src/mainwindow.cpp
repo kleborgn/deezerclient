@@ -649,6 +649,7 @@ void MainWindow::createConnections()
     connect(m_lastFmAPI, &LastFmAPI::albumInfoReceived, this, &MainWindow::onLastFmAlbumInfoReceived);
     connect(m_lastFmAPI, &LastFmAPI::authenticated, this, &MainWindow::onLastFmAuthenticated);
     connect(m_lastFmAPI, &LastFmAPI::error, this, &MainWindow::onError);
+    connect(m_lastFmAPI, &LastFmAPI::debugLog, this, &MainWindow::onDebugLog);
 
     // Fetch scrobble data when queue changes
     connect(m_audioEngine, &AudioEngine::queueChanged, this, &MainWindow::fetchScrobbleDataForQueue);

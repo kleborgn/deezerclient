@@ -1,5 +1,6 @@
 #include "lastfmapi.h"
 #include <QUrl>
+#include <QUrlQuery>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -83,7 +84,7 @@ void LastFmAPI::getSession(const QString& token)
 void LastFmAPI::getTrackInfo(const QString& artist, const QString& track)
 {
     if (!isAuthenticated()) {
-        qDebug() << "[LastFm] Not authenticated, skipping track info request";
+        emit debugLog("[LastFm] Not authenticated, skipping track info request");
         return;
     }
 
@@ -105,7 +106,7 @@ void LastFmAPI::getTrackInfo(const QString& artist, const QString& track)
 void LastFmAPI::getAlbumInfo(const QString& artist, const QString& album)
 {
     if (!isAuthenticated()) {
-        qDebug() << "[LastFm] Not authenticated, skipping album info request";
+        emit debugLog("[LastFm] Not authenticated, skipping album info request");
         return;
     }
 
@@ -139,25 +140,22 @@ void LastFmAPI::getUserInfo(const QString& username)
 void LastFmAPI::makeRequest(const QString& method, const QMap<QString, QString>& params, RequestType type)
 {
     QUrl url(API_URL);
+    QUrlQuery query;
 
-    // Build query string with explicit percent-encoding so special characters
-    // in track/artist/album names (e.g. &, +, #, quotes) don't break the URL.
-    // QUrlQuery doesn't encode all necessary characters for Last.fm's server.
-    QStringList queryParts;
     for (auto it = params.constBegin(); it != params.constEnd(); ++it) {
-        queryParts << QString::fromUtf8(QUrl::toPercentEncoding(it.key()))
-                      + "="
-                      + QString::fromUtf8(QUrl::toPercentEncoding(it.value()));
+        query.addQueryItem(it.key(), it.value());
     }
-    queryParts << "format=json";
+    query.addQueryItem("format", "json");
 
     // Add API signature for authenticated methods
     if (type == GetSession || type == GetTrackInfo || type == GetAlbumInfo) {
         QString signature = buildApiSignature(params);
-        queryParts << "api_sig=" + signature;
+        query.addQueryItem("api_sig", signature);
     }
 
-    url.setQuery(queryParts.join("&"), QUrl::StrictMode);
+    url.setQuery(query);
+
+    //emit debugLog(QString("[LastFm] URL: %1").arg(url.toString()));
 
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::UserAgentHeader, "DeezerClient-LastFm/1.0");
@@ -174,7 +172,7 @@ void LastFmAPI::makeRequest(const QString& method, const QMap<QString, QString>&
         m_requestContext[reply] = albumKey;
     }
 
-    qDebug() << "[LastFm] Request:" << method << url.toString();
+    //emit debugLog(QString("[LastFm] Request: %1").arg(method));
 }
 
 QString LastFmAPI::buildApiSignature(const QMap<QString, QString>& params) const
@@ -221,7 +219,7 @@ void LastFmAPI::handleNetworkReply(QNetworkReply* reply)
 
     if (reply->error() != QNetworkReply::NoError) {
         QString errorMsg = QString("Network error: %1").arg(reply->errorString());
-        qDebug() << "[LastFm]" << errorMsg;
+        emit debugLog(QString("[LastFm] %1").arg(errorMsg));
 
         if (requestType == GetToken || requestType == GetSession) {
             emit authenticationFailed(errorMsg);
@@ -245,7 +243,7 @@ void LastFmAPI::handleNetworkReply(QNetworkReply* reply)
     if (root.contains("error")) {
         int errorCode = root["error"].toInt();
         QString errorMsg = root["message"].toString();
-        qDebug() << "[LastFm] API error:" << errorCode << errorMsg;
+        emit debugLog(QString("[LastFm] API error: %1 %2").arg(errorCode).arg(errorMsg));
 
         if (requestType == GetToken || requestType == GetSession) {
             emit authenticationFailed(errorMsg);
@@ -260,7 +258,7 @@ void LastFmAPI::handleNetworkReply(QNetworkReply* reply)
         case GetToken: {
             QString token = root["token"].toString();
             if (!token.isEmpty()) {
-                qDebug() << "[LastFm] Token received:" << token;
+                emit debugLog(QString("[LastFm] Token received: %1").arg(token));
                 emit tokenReceived(token);
             } else {
                 emit authenticationFailed("No token in response");
@@ -276,7 +274,7 @@ void LastFmAPI::handleNetworkReply(QNetworkReply* reply)
             if (!sessionKey.isEmpty() && !username.isEmpty()) {
                 m_sessionKey = sessionKey;
                 m_username = username;
-                qDebug() << "[LastFm] Authenticated as:" << username;
+                emit debugLog(QString("[LastFm] Authenticated as: %1").arg(username));
                 emit authenticated(username);
             } else {
                 emit authenticationFailed("Invalid session data");
@@ -290,7 +288,7 @@ void LastFmAPI::handleNetworkReply(QNetworkReply* reply)
             int playcount = track["playcount"].toString().toInt();
             int userPlaycount = track["userplaycount"].toString().toInt();
 
-            qDebug() << "[LastFm] Track info:" << context << "playcount=" << playcount << "userplaycount=" << userPlaycount;
+            //emit debugLog(QString("[LastFm] Track info: %1 playcount=%2 userplaycount=%3").arg(context).arg(playcount).arg(userPlaycount));
             emit trackInfoReceived(context, playcount, userPlaycount);
             break;
         }
@@ -301,7 +299,7 @@ void LastFmAPI::handleNetworkReply(QNetworkReply* reply)
             int playcount = album["playcount"].toString().toInt();
             int userPlaycount = album["userplaycount"].toString().toInt();
 
-            qDebug() << "[LastFm] Album info:" << context << "playcount=" << playcount << "userplaycount=" << userPlaycount;
+            //emit debugLog(QString("[LastFm] Album info: %1 playcount=%2 userplaycount=%3").arg(context).arg(playcount).arg(userPlaycount));
             emit albumInfoReceived(context, playcount, userPlaycount);
             break;
         }
@@ -311,7 +309,7 @@ void LastFmAPI::handleNetworkReply(QNetworkReply* reply)
             QString username = user["name"].toString();
             int playcount = user["playcount"].toString().toInt();
 
-            qDebug() << "[LastFm] User info:" << username << "playcount=" << playcount;
+            //emit debugLog(QString("[LastFm] User info: %1 playcount=%2").arg(username).arg(playcount));
             emit userInfoReceived(username, playcount);
             break;
         }

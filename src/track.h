@@ -18,6 +18,7 @@ public:
 
     // Getters
     QString id() const { return m_id; }
+    QString streamId() const { return m_streamId.isEmpty() ? m_id : m_streamId; }
     QString title() const { return m_title; }
     QString artist() const { return m_artist; }
     QStringList featuredArtists() const { return m_featuredArtists; }
@@ -38,6 +39,7 @@ public:
 
     // Setters
     void setId(const QString& id) { m_id = id; }
+    void setStreamId(const QString& id) { m_streamId = id; }
     void setTitle(const QString& title) { m_title = title; }
     void setArtist(const QString& artist) { m_artist = artist; }
     void setFeaturedArtists(const QStringList& artists) { m_featuredArtists = artists; }
@@ -59,6 +61,7 @@ public:
 
 private:
     QString m_id;
+    QString m_streamId; // fallback/alternate ID for streaming (empty = use m_id)
     QString m_title;
     QString m_artist;
     QStringList m_featuredArtists;

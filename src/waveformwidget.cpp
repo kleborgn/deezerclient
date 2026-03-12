@@ -26,6 +26,13 @@ WaveformWidget::WaveformWidget(QWidget *parent)
     setCursor(Qt::PointingHandCursor);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     setFixedHeight(64);
+
+    m_repaintTimer.setInterval(33); // ~30 fps
+    m_repaintTimer.setSingleShot(true);
+    connect(&m_repaintTimer, &QTimer::timeout, this, [this]() {
+        m_pendingUpdate = false;
+        update();
+    });
 }
 
 // ── public setters ──────────────────────────────────────────────────
@@ -40,7 +47,10 @@ void WaveformWidget::setPosition(double position)
 {
     if (!m_dragging) {
         m_position = qBound(0.0, position, 1.0);
-        update();
+        if (!m_pendingUpdate) {
+            m_pendingUpdate = true;
+            m_repaintTimer.start();
+        }
     }
 }
 

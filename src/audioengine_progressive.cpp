@@ -90,7 +90,7 @@ BOOL CALLBACK AudioEngine::pushStreamSeek(QWORD offset, void* user) {
 
 void AudioEngine::onStreamChunkReady(const QByteArray& chunk, const QString& trackId)
 {
-    if (!m_currentTrack || m_currentTrack->id() != trackId || !m_progressiveMode)
+    if (!m_currentTrack || m_currentTrack->streamId() != trackId || !m_progressiveMode)
         return;
 
     // Prepend leftover bytes from previous chunk
@@ -298,7 +298,7 @@ void AudioEngine::onStreamChunkReady(const QByteArray& chunk, const QString& tra
 
 void AudioEngine::onProgressiveDownloadFinished(const QString& errorMessage, const QString& trackId)
 {
-    if (!m_currentTrack || m_currentTrack->id() != trackId || !m_progressiveMode)
+    if (!m_currentTrack || m_currentTrack->streamId() != trackId || !m_progressiveMode)
         return;
 
     if (!errorMessage.isEmpty()) {
@@ -559,7 +559,7 @@ void AudioEngine::preloadNextTrack()
 
     if (m_deezerAPI) {
         emit debugLog("[AudioEngine] Calling getStreamUrl on DeezerAPI...");
-        QString streamId = nextTrack->isUserUploaded() ? nextTrack->trackToken() : nextTrack->id();
+        QString streamId = nextTrack->isUserUploaded() ? nextTrack->trackToken() : nextTrack->streamId();
         QString streamFormat = nextTrack->isUserUploaded() ? QStringLiteral("MP3_MISC") : QString();
         m_deezerAPI->getStreamUrl(streamId, nextTrack->trackToken(), streamFormat);
         emit debugLog("[AudioEngine] getStreamUrl call completed");
@@ -579,7 +579,7 @@ void AudioEngine::onPreloadChunkReady(const QByteArray& chunk, const QString& tr
 {
     auto matchPreloadId = [&]() {
         if (!m_preloadTrack) return false;
-        return m_preloadTrack->isUserUploaded() ? (m_preloadTrack->trackToken() == trackId) : (m_preloadTrack->id() == trackId);
+        return m_preloadTrack->isUserUploaded() ? (m_preloadTrack->trackToken() == trackId) : (m_preloadTrack->streamId() == trackId);
     };
     if (!matchPreloadId()) return;
 
@@ -590,7 +590,7 @@ void AudioEngine::onPreloadDownloadFinished(const QString& errorMessage, const Q
 {
     auto matchPreloadId = [&]() {
         if (!m_preloadTrack) return false;
-        return m_preloadTrack->isUserUploaded() ? (m_preloadTrack->trackToken() == trackId) : (m_preloadTrack->id() == trackId);
+        return m_preloadTrack->isUserUploaded() ? (m_preloadTrack->trackToken() == trackId) : (m_preloadTrack->streamId() == trackId);
     };
     if (!matchPreloadId()) return;
 
@@ -615,8 +615,8 @@ void AudioEngine::onPreloadDownloadFinished(const QString& errorMessage, const Q
     m_preloadReady = true;
 
     // Decrypt preload buffer
-    if (m_deezerAPI && m_preloadTrack && !m_preloadTrack->id().isEmpty()) {
-        if (m_deezerAPI->decryptStreamBuffer(m_preloadBuffer, m_preloadTrack->id())) {
+    if (m_deezerAPI && m_preloadTrack && !m_preloadTrack->streamId().isEmpty()) {
+        if (m_deezerAPI->decryptStreamBuffer(m_preloadBuffer, m_preloadTrack->streamId())) {
             emit debugLog("[AudioEngine] Decrypted preload stream (BF_CBC_STRIPE)");
         }
     }

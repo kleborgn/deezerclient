@@ -123,7 +123,7 @@ void AudioEngine::loadTrack(std::shared_ptr<Track> track)
 
     m_pendingTrack = track;
     // User-uploaded tracks use the token as identifier and MP3_MISC format
-    QString streamId = track->isUserUploaded() ? track->trackToken() : track->id();
+    QString streamId = track->isUserUploaded() ? track->trackToken() : track->streamId();
     QString streamFormat = track->isUserUploaded() ? QStringLiteral("MP3_MISC") : QString();
     m_deezerAPI->getStreamUrl(streamId, track->trackToken(), streamFormat);
 
@@ -137,7 +137,7 @@ void AudioEngine::onStreamUrlReceived(const QString& trackId, const QString& url
     // User-uploaded tracks use the token as stream identifier
     auto matchStreamId = [](const std::shared_ptr<Track>& t, const QString& id) {
         if (!t) return false;
-        return t->isUserUploaded() ? (t->trackToken() == id) : (t->id() == id);
+        return t->isUserUploaded() ? (t->trackToken() == id) : (t->streamId() == id);
     };
     if (matchStreamId(m_preloadTrack, trackId)) {
         if (url.contains("cdns-preview", Qt::CaseInsensitive)) {
@@ -183,7 +183,7 @@ void AudioEngine::startLoadingUrl(const QString& url)
         return;
     }
     if (url.startsWith("https://", Qt::CaseInsensitive)) {
-        QString trackId = m_currentTrack ? m_currentTrack->id() : QString();
+        QString trackId = m_currentTrack ? m_currentTrack->streamId() : QString();
 
         // Prepare progressive state
         m_progressiveMode = true;
